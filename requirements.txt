@@ -1,4 +1,4 @@
 streamlit
-twelvedata
+yfinance
 google-genai
 pydantic
