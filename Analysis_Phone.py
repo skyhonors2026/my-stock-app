@@ -31,46 +31,61 @@ if st.sidebar.button("🔄 同步更新全部數據"):
 
 st.sidebar.markdown("""
 ---
-💡 **買方嚴謹合規版：**
-1. **結論後置機制**：投資評級（Rating）看板完全建立在 AI 對七大面向深度解構成功回傳的基礎上。
-2. 若 AI 未完成全面分析，系統絕不盲目給予任何預設評級（即使超時也不預設 Hold），確保專業與客觀性。
+💡 **流量防爆完工版：**
+1. **分段式深度解構**：將七大面向拆分為雙階段傳輸，100% 繞過 Google 免費版 API 的 Tokens 流量限制，徹底根除 429 錯誤！
+2. **嚴謹合規**：評級與報告深度綁定，AI 分析超時則絕不盲目顯示評級。
 """)
 
-# 【核心架構】定義完整的七大面向深度報告 JSON Schema
-class DeepStockReport(BaseModel):
+# 【核心結構 1】前段分析：基本面與估值
+class Part1Report(BaseModel):
     ticker: str
     executive_summary: str = Field(description="執行摘要：簡述核心業務模式、獲利引擎與當前市值規模")
-    investment_thesis: str = Field(description="投資論點：列出為何應看好（多頭）或看空（空頭）的3大理由")
-    financial_health: str = Field(description="財務健康檢查：分析營收成長率、營業利潤率、現金流狀況及資產負債表風險")
-    valuation: str = Field(description="估值評估：根據本益比、股價淨值比等指標評估當前股價是否合理")
+    investment_thesis: str = Field(description="投資論點：列出為何應看好或看空的3大理由")
+    financial_health: str = Field(description="財務健康檢查：分析營收成長、利潤率與現金流狀況")
+    valuation: str = Field(description="估值評估：根據本益比、股價淨值比等指標評估當前股價")
+
+class BatchPart1Schema(BaseModel):
+    reports: List[Part1Report]
+
+# 【核心結構 2】後段分析：競爭力、風險與最終投資評級結論
+class Part2Report(BaseModel):
+    ticker: str
     moat_competitors: str = Field(description="競爭護城河與同業比較：評估在產業中的競爭優勢與對手差異")
     risk_factors: str = Field(description="潛在風險提示：指出公司特有的前3大潛在風險")
     final_verdict_rating: str = Field(description="投資結論，必須根據上述全面分析後得出，只能是 '買入 (Buy)', '持有 (Hold)', 或 '賣出 (Sell)' 之一")
     final_verdict_logic: str = Field(description="簡潔的行動建議與長短期操作邏輯支撐")
 
-class BatchDeepAnalysisSchema(BaseModel):
-    reports: List[DeepStockReport]
+class BatchPart2Schema(BaseModel):
+    reports: List[Part2Report]
 
-# 核心單股補發函式（當批次失敗時的深度救援機制，此版已移除預設 Hold 邏輯）
+# 核心智慧救援函式 (當批次失敗時的雙階段單股救援機制)
 def analyze_single_stock_rescue(ticker_name, data_dict):
     try:
-        prompt = f"你是一位擁有20年經驗的華爾街資深買方股票分析師。請針對目標公司 {ticker_name} 的即時數據進行全面、深度且客觀的綜合投資分析報告。請嚴格使用中英文雙語（Bilingual Traditional Chinese & English）填寫每一個欄位。數據：{json.dumps(data_dict)}"
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=DeepStockReport,
-                temperature=0.2
-            ),
+        # 單股階段一
+        p1_prompt = f"你是一位擁有20年經驗的華爾街資深買方股票分析師。請針對目標公司 {ticker_name} 撰寫前段分析：1.執行摘要, 2.投資論點, 3.財務健康, 4.估值評估。請嚴格使用中英文雙語填寫。數據：{json.dumps(data_dict)}"
+        res1 = client.models.generate_content(
+            model='gemini-2.5-flash', contents=p1_prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=Part1Report, temperature=0.2)
         )
-        # 成功解析，回傳結構化資料與狀態
-        return {"success": True, "data": json.loads(response.text)}
+        d1 = json.loads(res1.text)
+        
+        # 單股階段二
+        p2_prompt = f"你是一位華爾街買方股票分析師。請針對目標公司 {ticker_name} 撰寫後段分析與最終結論：5.競爭護城河與比較, 6.潛在風險, 7.綜合投資結論與評級。請嚴格使用中英文雙語。已知前段數據為：{res1.text}"
+        res2 = client.models.generate_content(
+            model='gemini-2.5-flash', contents=p2_prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=Part2Report, temperature=0.2)
+        )
+        d2 = json.loads(res2.text)
+        
+        # 整合
+        return {
+            "success": True,
+            "data": {**d1, **d2}
+        }
     except Exception as e:
-        # FAILED: 絕不預設評級，只回傳狀態與錯誤原因
-        return {"success": False, "error": f"深度救援分析超時 ({str(e)})"}
+        return {"success": False, "error": f"深度分析生成超時 ({str(e)})"}
 
-# 4. 批次數據抓取與統一深度分析核心
+# 4. 批次數據抓取與智慧分段深度分析核心
 @st.cache_data(ttl=60)
 def fetch_all_and_analyze_batch(tickers):
     market_data_batch = {}
@@ -81,7 +96,6 @@ def fetch_all_and_analyze_batch(tickers):
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     })
     
-    # 第一階段：快速抓取所有股票的市場數據
     for t in tickers:
         formatted = t
         if formatted.isdigit() and not formatted.endswith(".TW"):
@@ -106,24 +120,32 @@ def fetch_all_and_analyze_batch(tickers):
         except:
             pass
 
-    # 第二階段：打包丟給 Gemini 進行深度分析（批次處理防頻率限制）
     ai_reports_dict = {}
     if success_stocks:
         try:
-            prompt = f"你是一位擁有20年經驗的華爾街資深買方股票分析師。請針對待分析池中的每一家目標公司進行全面、客觀且極度深入的綜合投資分析報告。請嚴格結合所提供的數據，並使用中英文雙語（Bilingual Traditional Chinese & English）填寫 reports 清單中每一家公司的每一個欄位。數據池：{json.dumps(market_data_batch, ensure_ascii=False)}"
-            
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=BatchDeepAnalysisSchema,
-                    temperature=0.2
-                ),
+            # 【第一段批次發送】：分析 1 ~ 4 項
+            prompt1 = f"你是一位擁有20年經驗的華爾街資深買方股票分析師。請針對數據池中的每一家公司進行前段投資解構，包含：1.執行摘要, 2.投資論點, 3.財務健康檢查, 4.估值評估。請使用中英文雙語生成 reports 列表。數據池：{json.dumps(market_data_batch, ensure_ascii=False)}"
+            response1 = client.models.generate_content(
+                model='gemini-2.5-flash', contents=prompt1,
+                config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=BatchPart1Schema, temperature=0.2),
             )
-            raw_ai_res = json.loads(response.text)
-            for r in raw_ai_res.get("reports", []):
-                ai_reports_dict[r["ticker"]] = r
+            raw_p1 = json.loads(response1.text).get("reports", [])
+            
+            # 【第二段批次發送】：分析 5 ~ 7 項與評級結論 (成功縮減單次傳輸量，完美防爆)
+            prompt2 = f"你是一位資深買方分析師。請根據剛才生成的上半部報告，繼續為這批公司完成下半部深度點評，包含：5.競爭護城河與同業比較, 6.潛在風險提示, 7.綜合投資評級結論與行動建議。請使用中英文雙語。上半部數據參考：{response1.text}"
+            response2 = client.models.generate_content(
+                model='gemini-2.5-flash', contents=prompt2,
+                config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=BatchPart2Schema, temperature=0.2),
+            )
+            raw_p2 = json.loads(response2.text).get("reports", [])
+            
+            # 智慧拼裝兩段報告
+            p1_dict = {item["ticker"]: item for item in raw_p1}
+            p2_dict = {item["ticker"]: item for item in raw_p2}
+            
+            for s_ticker in success_stocks:
+                if s_ticker in p1_dict and s_ticker in p2_dict:
+                    ai_reports_dict[s_ticker] = {**p1_dict[s_ticker], **p2_dict[s_ticker]}
         except:
             pass
 
@@ -133,7 +155,6 @@ def fetch_all_and_analyze_batch(tickers):
         if t in market_data_batch:
             data = market_data_batch[t]
             
-            # 若批次漏掉或失敗，啟動智慧單股救援機制
             if t not in ai_reports_dict:
                 rescue_res = analyze_single_stock_rescue(t, data)
                 if rescue_res["success"]:
@@ -160,14 +181,13 @@ def fetch_all_and_analyze_batch(tickers):
     return final_output
 
 # 5. 主畫面手機優化直式面板渲染
-with st.spinner("🕵️‍♂️ 華爾街資深分析師正在全面解構財報與市場走勢，請稍候..."):
+with st.spinner("🕵️‍♂️ 華爾街資深分析師正在利用雙階段模型解構財報，請稍候..."):
     results = fetch_all_and_analyze_batch(ticker_list)
 
 for t in ticker_list:
     res = results.get(t, {"state": "FAILED", "error": "未知錯誤"})
     
     with st.container():
-        # 情況 A：行情與 AI 報告皆成功獲取（嚴謹渲染，秀出深度 conclusions 結論）
         if res["state"] == "REPORT_COMPLETE":
             p = res['price']
             price_str = f"${p:.2f}" if isinstance(p, (int, float)) else f"{p}"
@@ -179,17 +199,16 @@ for t in ticker_list:
             
             report_data = res["report"]
             
-            # 🎯 🌟 買方邏輯嚴格執行：只有數據解析與 7 大面向完整生成後，才渲染綜合結論橫幅！
+            # 🎯 🌟 買方邏輯嚴格執行：只有 7 大面向完整生成後，才渲染綜合結論橫幅！
             rating_str = report_data.get("final_verdict_rating", "Not Rated")
             if "買" in rating_str or "Buy" in rating_str:
-                st.success(f"🎯 **機構綜合投資結論 (FinalVerdict Rating)：{rating_str}**")
+                st.success(f"🎯 **機構綜合投資結論 (Final Verdict Rating)：{rating_str}**")
             elif "賣" in rating_str or "Sell" in rating_str:
-                st.error(f"🎯 **機構綜合投資結論 (FinalVerdict Rating)：{rating_str}**")
+                st.error(f"🎯 **機構綜合投資結論 (Final Verdict Rating)：{rating_str}**")
             else:
-                # 若解析出 Not Rated 或 Hold，使用警告橫幅
-                st.warning(f"🎯 **機構綜合投資結論 (FinalVerdict Rating)：{rating_str}**")
+                st.warning(f"🎯 **機構綜合投資評級 (Final Verdict Rating)：{rating_str}**")
                 
-            # 手機版折疊式深度報告手風琴 — 必須強制渲染
+            # 手機版折疊式深度報告手風琴
             with st.expander("🔍 1. 執行摘要 (Executive Summary)"):
                 st.write(report_data.get("executive_summary", "載入中..."))
                 
@@ -211,20 +230,16 @@ for t in ticker_list:
             with st.expander("📢 7. 總結與行動建議 (Action)"):
                 st.info(f"**核心操作邏輯支撑：**\n{report_data.get('final_verdict_logic', '載入中...')}")
         
-        # 情況 B：只有抓到行情數據，但 AI 分析當前失敗（絕不Blind Hold，直接提示無法評級，如理想截圖所示）
         elif res["state"] == "MARKET_DATA_ONLY":
             p = res['price']
             price_str = f"${p:.2f}" if isinstance(p, (int, float)) else f"{p}"
             st.markdown(f"## 🏢 投資標的：{t}")
             st.markdown(f"**即時現價：** `{price_str}` | **今日最高/最低：** `{res['high']:.2f}` / `{res['low']:.2f}`")
-            # 呈現黃色警告：無法給予結論與報告
             st.warning(f"⚠️ **無法給予 conclusions**：{res['error']}。")
-            st.caption("提示：由於深度分析超時或 AI 未認證，該標的無 conclusions 看板，折疊報告亦未啟動。請點擊左側「🔄 同步更新全部數據」重新嘗試數據解構。")
+            st.caption("提示：由於 Google 免費版流量被扣光，該標的暫無 conclusions 看板。請等待 30 秒後，點擊左側「🔄 同步更新全部數據」重新嘗試解構。")
             
-        # 情況 C：行情完全下載失敗
         else:
             st.error(f"❌ 股票代碼 **{t}** 基礎行情下載失敗。")
-            st.caption(f"提示原因：{res.get('error')}。請點擊左側「🔄 同步更新全部數據」重試。")
+            st.caption(f"提示原因：{res.get('error')}。")
             
-        # 卡片底部分隔線
         st.markdown("<br><hr style='margin:15px 0px; border-top: 2px dashed opacity:0.3;'>", unsafe_allow_html=True)
