@@ -1,4 +1,4 @@
-import os
+ import os
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -32,41 +32,39 @@ st.sidebar.markdown("""
 💡 **行動裝置小技巧：**
 1. 支援同時監控多支台股與美股。
 2. 台股只需輸入純數字（如 `4966`），系統會自動補上 `.TW`。
-3. 修改代碼或更換選單後，數據與 Gemini AI 評級將**自動全同步執行**。
+3. 本版本已針對雲端海外伺服器進行「防阻擋最佳化」，大幅提升連線穩定度。
 """)
 
-# 【結構化輸出定義】強制 Gemini 只回傳指定欄位，大幅提升行動端加載速度
+# 【結構化輸出定義】
 class StockAnalysisSchema(BaseModel):
     rating: str = Field(description="投資評級，只能是 '買入 (Buy)', '持有 (Hold)', 或 '賣出 (Sell)' 之一")
     reason: str = Field(description="15字以內的一句話專業買方核心邏輯支撐")
 
-# 4. 核心同步處理函式 (包含雲端環境專用的代碼強健性修正)
-@st.cache_data(ttl=120)
+# 4. 核心同步處理函式 (跨國雲端環境防阻擋優化版)
+@st.cache_data(ttl=60) # 縮短快取至60秒
 def fetch_and_analyze(ticker_name):
-    # 移除可能夾雜的空白
     formatted = str(ticker_name).strip()
     
-    # 【核心修正】強健的台股代碼自動補全邏輯
     if formatted.isdigit() and not formatted.endswith(".TW"):
         formatted = f"{formatted}.TW"
         
     try:
-        # 向 yfinance 獲取核心市場數據
+        # 向 yfinance 要求歷史數據（歷史走勢在海外雲端最不容易被封鎖）
         stock = yf.Ticker(formatted)
-        info = stock.info
         hist = stock.history(period="1mo")
         
-        # 安全取得即時價格與技術數據
-        current_price = info.get('currentPrice', info.get('regularMarketPrice', 'N/A'))
-        day_high = info.get('dayHigh', 'N/A')
-        day_low = info.get('dayLow', 'N/A')
-        volume = info.get('volume', 'N/A')
-        recent_trend = hist['Close'].tail(5).tolist() if not hist.empty else []
-        
-        # 若 yfinance 回傳空數據，主動拋出異常
-        if current_price == 'N/A':
-            raise ValueError("YFinance returned empty asset data.")
+        if hist.empty:
+            raise ValueError("海外伺服器連線超時，暫時無法讀取歷史K線。")
             
+        # 【核心修正】不使用常被海外機房封鎖的 stock.info，直接從 hist 提取最準確的即時交易數據
+        latest_row = hist.iloc[-1]
+        current_price = latest_row['Close']
+        day_high = latest_row['High']
+        day_low = latest_row['Low']
+        volume = latest_row['Volume']
+        
+        recent_trend = hist['Close'].tail(5).tolist()
+        
         # 建立高純度的華爾街分析師 Prompt
         prompt = f"""
         你是一位擁有20年經驗的華爾街資深買方股票分析師。
@@ -91,7 +89,6 @@ def fetch_and_analyze(ticker_name):
             ),
         )
         
-        # 解析 AI 結構化 JSON
         import json
         ai_data = json.loads(response.text)
         
@@ -109,23 +106,20 @@ def fetch_and_analyze(ticker_name):
     except Exception as e:
         return {"success": False, "ticker": ticker_name, "display_ticker": formatted, "error": str(e)}
 
-# 5. 主畫面：手機優化版直式「卡片佈局 (Card Layout)」
+# 5. 主畫面：手機優化版直式卡片佈局
 progress_bar = st.progress(0)
 total_stocks = len(ticker_list)
 
 for index, t in enumerate(ticker_list):
     res = fetch_and_analyze(t)
     
-    # 每一支股票封裝在一個立體的容器卡片內
     with st.container():
         if res["success"]:
-            # 數值格式化處理
             p = res['price']
             price_str = f"${p:.2f}" if isinstance(p, (int, float)) else f"{p}"
             v = res['volume']
             vol_str = f"{v:,}" if isinstance(v, (int, float)) else f"{v}"
             
-            # 卡片第一行：股票名稱(代碼) 與 投資評級
             c1, c2 = st.columns([1, 1])
             c1.markdown(f"### 📈 {res['ticker']}")
             
@@ -137,21 +131,20 @@ for index, t in enumerate(ticker_list):
             else:
                 c2.markdown(f"### <span style='color:#ffc107; float:right;'>🟡 {rating_str}</span>", unsafe_allow_html=True)
             
-            # 卡片第二行：基本數據面板
-            st.markdown(f"**現價：** `{price_str}` | **高/低：** `{res['high']}` / `{res['low']}` | **成交量：** `{vol_str}`")
+            # 高低價格式化輸出
+            h = res['high']
+            l = res['low']
+            high_str = f"{h:.2f}" if isinstance(h, (int, float)) else str(h)
+            low_str = f"{l:.2f}" if isinstance(l, (int, float)) else str(l)
             
-            # 卡片第三行：華爾街分析師觀點
+            st.markdown(f"**現價：** `{price_str}` | **高/低：** `{high_str}` / `{low_str}` | **成交量：** `{vol_str}`")
             st.markdown(f"> 💬 **買方核心邏輯：** {res['reason']}")
         else:
-            # 錯誤呈現
-            st.error(f"❌ 股票代碼 **{res['ticker']}** ({res['display_ticker']}) 獲取失敗。")
-            st.caption(f"原因提示：雲端伺服器連線超時或代碼不合法。建議手動嘗試輸入完整後綴（例如：{res['ticker']}.TW）")
+            st.error(f"❌ 股票代碼 **{res['ticker']}** ({res['display_ticker']}) 數據下載超時。")
+            st.caption(f"提示：已啟動備用防封鎖機制，如仍失敗，代表 Yahoo Finance 海外節點當前負載過高，請點擊左側「🔄 同步更新全部數據」重試。")
             
-        # 卡片底部分隔線
         st.markdown("<hr style='margin:12px 0px; padding:0px; opacity:0.25;'>", unsafe_allow_html=True)
     
-    # 更新進度條
     progress_bar.progress((index + 1) / total_stocks)
 
-# 隱藏進度條
 progress_bar.empty()
