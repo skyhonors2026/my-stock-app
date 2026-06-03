@@ -7,7 +7,7 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 # 1. 初始化 Gemini 用戶端 (已填入您的專屬 API Key)
-api_key = "AIzaSyBQS1AgANH1cyAbLV1o1otNUXpb8FvleEU"
+api_key = "81a265563956411097b22208aad7b96e"
 client = genai.Client(api_key=api_key)
 
 # 2. 設定網頁版面 (針對手機直式螢幕進行優化)
