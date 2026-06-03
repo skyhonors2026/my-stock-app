@@ -23,6 +23,10 @@ client = genai.Client()
 st.set_page_config(layout="centered", page_title="Mobile Stock Monitor")
 st.title("📱 華爾街行動自訂監控面板")
 
+# 初始化內部 Session 記憶體快取防刷鎖
+if "cached_ai_reports" not in st.session_state:
+    st.session_state.cached_ai_reports = {}
+
 # 3. 側邊欄控制台
 st.sidebar.header("控制台 | Settings")
 default_stocks = "00919, 0050, 2454, 2330, 3592, 4961, 2303, 4966, 元大, 緯創"
@@ -32,15 +36,16 @@ raw_input = st.sidebar.text_area("輸入股票代碼或中文名稱 (用逗號�
 ticker_list = [t.strip() for t in raw_input.split(",") if t.strip()]
 
 if st.sidebar.button("🔄 同步更新全部數據"):
+    st.session_state.cached_ai_reports = {} # 清空 AI 快取
     st.cache_data.clear()
     st.rerun()
 
 st.sidebar.markdown("""
 ---
 💡 **行動端自定義功能：**
-1. **增量即時渲染 (Incremental Rendering)**：標的報告「每跑完一個就立刻顯示一個」，無需在頂端死等，看盤極致流暢！
-2. **原地冷卻倒數**：物理冷卻指示器直接移至個股卡片內，動態進度一目了然。
-3. **原生技術圖表引擎**：記憶體直通，秒級渲染 20MA 與布林通道技術曲線。
+1. **增量即時渲染 (Incremental Rendering)**：標的報告每跑完一個就立刻就地鎖定顯示，絕不被後續刷新洗掉！
+2. **黃金 12 秒安全鎖**：嚴格執行個股間物理冷卻，100% 繞過 429 流量限額。
+3. **原生技術圖表引擎**：秒級渲染 20MA 與布林通道技術曲線。
 """)
 
 # 【智慧硬核對照表】100% 乾淨的中英翻譯與備用官方報價分流核心
@@ -131,7 +136,7 @@ def analyze_stock_markdown(ticker_name, data_dict):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# 4. 核心數據調度快取引擎 (第一階段：秒速拉回所有行情)
+# 4. 核心數據調度快取引擎
 @st.cache_data(ttl=60)
 def fetch_all_market_data(tickers):
     market_data_batch = {}
@@ -164,84 +169,84 @@ def fetch_all_market_data(tickers):
             pass
     return market_data_batch
 
-# 5. 主畫面手機優化「增量遞進」渲染核心
+# 拉取基礎行情數據
 market_data = fetch_all_market_data(ticker_list)
-
-# 💡 關鍵創新：在記憶體中維護一個運行時報告池，這可以防止 Streamlit 每次重整時洗掉前面已經跑完的成果
-if "cached_ai_reports" not in st.session_state:
-    st.session_state.cached_ai_reports = {}
-
-# 預先在前端把所有骨架與線圖秒級畫出來，消除長達 1 分鐘的白畫面等待
-ui_placeholders = {}
-for t in ticker_list:
-    if t in market_data:
-        data = market_data[t]
-        p = data['price']
-        price_str = f"${p:.2f}" if isinstance(p, (int, float)) else f"{p}"
-        v = data['volume']
-        vol_str = f"{v:,}" if isinstance(v, (int, float)) else f"{v}"
-        
-        st.markdown(f"## 🏢 {data['display_name']}")
-        st.markdown(f"**即時現價：** `{price_str}` | **今日最高/最低：** `{data['high']:.2f}` / `{data['low']:.2f}` | **今日成交量：** `{vol_str}`")
-        
-        try:
-            chart_df = data["chart_df"].copy()
-            chart_df.columns = ['收盤價 (Close)', '20日均線 (MA20)', '布林上軌 (Upper Band)', '布林下軌 (Lower Band)']
-            st.line_chart(chart_df, height=220) 
-        except:
-            st.caption("技術圖表渲染中...")
-            
-        # 🌟 亮點：為每一檔股票卡片下方挖好一個專屬的「AI報告置放箱 (Placeholder)」
-        ui_placeholders[t] = st.empty()
-        st.markdown("<br><hr style='margin:15px 0px; border-top: 2px dashed opacity:0.3;'>", unsafe_allow_html=True)
-    else:
-        st.error(f"❌ 股票標的 **{t}** 基礎行情載入失敗。")
-
-# 6. 全自動「遞進式」AI 呼叫核心 (跑完一隻，立刻就地更新一隻)
 success_stocks = [t for t in ticker_list if t in market_data]
-total_count = len(success_stocks)
 
-for idx, t in enumerate(success_stocks):
-    box = ui_placeholders[t]
-    
-    # 狀況 A：如果這檔股票之前已經跑完並記錄在快取裡了，直接在箱子裡秒秀結果，不重複消耗額度
-    if t in st.session_state.cached_ai_reports:
-        ai_res = st.session_state.cached_ai_reports[t]
-    else:
-        # 狀況 B：新一輪分析，現場呼叫
-        with box.container():
-            st.info(f"⏳ **【進度 {idx+1}/{total_count}】正在全面解構 {t} 財報與估值，請稍候...**")
-            
+# 5. ⚙️ 背景核心調度聯動：檢查當前哪一檔需要跑 AI 分析
+need_rerun = False
+for t in success_stocks:
+    # 如果某一檔股票還沒有被算過，立刻觸發它
+    if t not in st.session_state.cached_ai_reports:
+        # 顯示全域頂部進度提示，避免畫面空白
+        st.info(f"⏳ **正在全自動解構 {t} 的基本面報告，請稍候...**")
+        
         data = market_data[t]
         ai_res = analyze_stock_markdown(t, {"name": data["display_name"], "price": data["price"]})
         
-        # 記錄到 Session 記憶體快取
+        # 牢牢鎖進 Session 記憶體，不被 Rerun 沖掉
         st.session_state.cached_ai_reports[t] = ai_res
         
-    # 【就地就位渲染】一分析完，立刻把該箱子抽換成亮麗的結論橫幅與 7 大面向
-    if ai_res["success"]:
-        report_text = str(ai_res["text"])
-        with box.container():
-            if "買入" in report_text or "Buy" in report_text:
-                st.success("🎯 **機構綜合投資結論 / Final Verdict Rating：建議 買入 (Buy)**")
-            elif "賣出" in report_text or "Sell" in report_text:
-                st.error("🎯 **機構綜合投資結論 / Final Verdict Rating：建議 賣出 (Sell)**")
-            else:
-                st.warning("🎯 **機構綜合投資結論 / Final Verdict Rating：建議 持有 (Hold) 觀望**")
-            st.markdown("---")
-            st.markdown(report_text)
-            st.markdown("---")
-    else:
-        with box.container():
-            st.warning(f"⚠️ **無法完全給予 conclusions**：{ai_res['error']}。")
-
-    # 🌟【12秒就地冷卻倒數】只有當「不是最後一檔」且「是當場現算」時，才在下一個箱子跳出即時倒數提示
-    if idx < total_count - 1 and t not in st.session_state.cached_ai_reports:
-        next_ticker = success_stocks[idx + 1]
-        next_box = ui_placeholders[next_ticker]
+        # 算完一檔後，如果後面還有股票要算，原地執行黃金 12 秒物理冷卻
+        current_idx = success_stocks.index(t)
+        if current_idx < len(success_stocks) - 1:
+            countdown_box = st.empty()
+            for countdown in range(12, 0, -1):
+                countdown_box.markdown(f"💤 **安全分流保護中，下一檔股票分析冷卻剩餘 `{countdown}` 秒...**")
+                time.sleep(1)
+            countdown_box.empty()
         
-        for countdown in range(12, 0, -1):
-            with next_box.container():
-                st.markdown(f"💤 **【流量安全鎖生效中】已完成前項評級，12秒物理冷卻倒數：`剩餘 {countdown} 秒`...**")
-            time.sleep(1)
-        next_box.empty() # 倒數結束，清空箱子迎接下一輪生成
+        # 標記需要 Rerun 來刷新前端畫面更新
+        need_rerun = True
+        break # 一次只跑一檔，隨後靠 rerun 進入下一檔，完美增量渲染！
+
+if need_rerun:
+    st.rerun()
+
+# 6. 🎨 前端動態畫面完美渲染（百分之百不會被沖刷）
+for t in ticker_list:
+    with st.container():
+        if t in market_data:
+            data = market_data[t]
+            p = data['price']
+            price_str = f"${p:.2f}" if isinstance(p, (int, float)) else f"{p}"
+            v = data['volume']
+            vol_str = f"{v:,}" if isinstance(v, (int, float)) else f"{v}"
+            
+            # 渲染基本市況
+            st.markdown(f"## 🏢 {data['display_name']}")
+            st.markdown(f"**即時現價：** `{price_str}` | **今日最高/最低：** `{data['high']:.2f}` / `{data['low']:.2f}` | **今日成交量：** `{vol_str}`")
+            
+            # 渲染布林通道
+            try:
+                chart_df = data["chart_df"].copy()
+                chart_df.columns = ['收盤價 (Close)', '20日均線 (MA20)', '布林上軌 (Upper Band)', '布林下軌 (Lower Band)']
+                st.line_chart(chart_df, height=220) 
+            except:
+                st.caption("技術圖表渲染中...")
+
+            # 從 Session 狀態防刷鎖中抓取報告
+            if t in st.session_state.cached_ai_reports:
+                ai_res = st.session_state.cached_ai_reports[t]
+                if ai_res["success"]:
+                    report_text = str(ai_res["text"])
+                    
+                    if "買入" in report_text or "Buy" in report_text:
+                        st.success("🎯 **機構綜合投資結論：建議 買入 (Buy)**")
+                    elif "賣出" in report_text or "Sell" in report_text:
+                        st.error("🎯 **機構綜合投資結論：建議 賣出 (Sell)**")
+                    else:
+                        st.warning("🎯 **機構綜合投資結論：建議 持有 (Hold) 觀望**")
+                        
+                    st.markdown("---")
+                    st.markdown(report_text)
+                    st.markdown("---")
+                else:
+                    st.error(f"⚠️ **分析生成失敗**：{ai_res['error']}")
+            else:
+                # 還沒輪到的股票，在下方優雅地提示排隊中
+                st.info("⏳ 華爾街分析師正依序排隊解構基本面，即將長出報告...")
+        else:
+            st.error(f"❌ 股票標的 **{t}** 基礎行情載入失敗。")
+            
+        st.markdown("<br><hr style='margin:15px 0px; border-top: 2px dashed opacity:0.3;'>", unsafe_allow_html=True)
