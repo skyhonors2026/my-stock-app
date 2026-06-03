@@ -4,14 +4,13 @@ import yfinance as yf
 import pandas as pd
 import requests
 import json
-import time  # 引入時間套件，用以執行智慧防刷延遲
+import time
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 from typing import List
 
-# 1. 初始化 Gemini 用戶端
-# 💡 提示：如果等一下還是噴 429，請去 Google AI Studio 重新創一個新 Key 貼在這裡，就能直接跳過 10 分鐘懲罰！
+# 1. 初始化 Gemini 用戶端 (使用您的專屬有效金鑰)
 GEMINI_API_KEY = "AIzaSyBQS1AgANH1cyAbLV1o1otNUXpb8FvleEU"
 client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -21,11 +20,11 @@ st.title("📱 華爾街行動自訂監控面板")
 
 # 3. 側邊欄控制台
 st.sidebar.header("控制台 | Settings")
-default_stocks = "4966, 0050, 00919, NVDA, AAPL"
-raw_input = st.sidebar.text_area("輸入股票代碼 (用逗號隔開):", value=default_stocks, height=120)
+default_stocks = "4966, 0050, 鴻海, NVDA, TSLA, 輝達"
+raw_input = st.sidebar.text_area("輸入股票代碼或中文名稱 (用逗號隔開):", value=default_stocks, height=120)
 
-# 處理代碼字串轉換
-ticker_list = [t.strip().upper() for t in raw_input.split(",") if t.strip()]
+# 處理代碼字串轉換，去除前後空白
+raw_ticker_list = [t.strip() for t in raw_input.split(",") if t.strip()]
 
 if st.sidebar.button("🔄 同步更新全部數據"):
     st.cache_data.clear()
@@ -33,9 +32,10 @@ if st.sidebar.button("🔄 同步更新全部數據"):
 
 st.sidebar.markdown("""
 ---
-💡 **流量防爆冷卻版：**
-1. **雙階段防刷延遲**：在發送上半部與下半部報告之間，系統自動增加物理冷卻時間，徹底避免被 Google 誤判為惡意刷流量。
-2. **嚴謹合規**：評級與報告深度綁定，AI 分析超時則絕不盲目顯示評級。
+💡 **行動裝置高級技巧：**
+1. **輸入極具彈性**：支援輸入純數字 (`0050`)、美股代碼 (`AAPL`)、或直接輸入中文名稱 (`鴻海`、`輝達`)。
+2. **內置技術分析線圖**：每一張卡片自動渲染「日線軌跡」與「布林通道（20MA ± 2σ）」。
+3. **結論後置**：評級完全建立在 AI 完成 7 大面向深度報告的基礎上。
 """)
 
 # 【核心結構 1】前段分析：基本面與估值
@@ -60,6 +60,26 @@ class Part2Report(BaseModel):
 class BatchPart2Schema(BaseModel):
     reports: List[Part2Report]
 
+# 【智慧搜尋引擎】中文名稱全自動識別轉股票代碼核心
+def convert_chinese_to_ticker(session, name_str):
+    if name_str.isdigit():
+        return f"{name_str}.TW"
+    # 若本身就是純英文字母代碼 (美股)，直接回傳
+    if name_str.isalpha():
+        return name_str
+        
+    # 如果包含中文，調用 Yahoo Finance Query API 進行跨國模糊搜尋
+    try:
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={requests.utils.quote(name_str)}&quotesCount=1&newsCount=0"
+        res = session.get(url, timeout=5)
+        data = res.json()
+        quotes = data.get("quotes", [])
+        if quotes:
+            return quotes[0].get("symbol", name_str)
+    except:
+        pass
+    return name_str
+
 # 智慧型雙階段單股救援機制
 def analyze_single_stock_rescue(ticker_name, data_dict):
     try:
@@ -70,7 +90,6 @@ def analyze_single_stock_rescue(ticker_name, data_dict):
         )
         d1 = json.loads(res1.text)
         
-        # 智慧物理冷卻：在救援單股時也強制暫停 1.5 秒
         time.sleep(1.5)
         
         p2_prompt = f"你是一位華爾街買方股票分析師。請針對目標公司 {ticker_name} 撰寫後段分析與最終結論：5.競爭護城河與比較, 6.潛在風險, 7.綜合投資結論與評級。請嚴格使用中英文雙語。已知前段數據為：{res1.text}"
@@ -95,45 +114,59 @@ def fetch_all_and_analyze_batch(tickers):
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     })
     
-    for t in tickers:
-        formatted = t
-        if formatted.isdigit() and not formatted.endswith(".TW"):
-            formatted = f"{formatted}.TW"
+    # 第一階段：解析代碼並快速抓取行情與歷史 K 線數據
+    for original_name in tickers:
+        formatted = convert_chinese_to_ticker(session, original_name)
             
         try:
             stock = yf.Ticker(formatted, session=session)
-            hist = stock.history(period="1mo")
+            # 為了布林代數曲線（20 MA），我們至少需要拉取 3 個月（3mo）的日線數據
+            hist = stock.history(period="3mo")
             if hist.empty:
                 continue
                 
+            # 獲取中文/英文官方全名
+            long_name = stock.info.get('longName', original_name)
+            
+            # 計算布林代數曲線 (Bollinger Bands)
+            hist['MA20'] = hist['Close'].rolling(window=20).mean()
+            hist['STD20'] = hist['Close'].rolling(window=20).std()
+            hist['UpperBand'] = hist['MA20'] + (hist['STD20'] * 2)
+            hist['LowerBand'] = hist['MA20'] - (hist['STD20'] * 2)
+            
             latest_row = hist.iloc[-1]
-            market_data_batch[t] = {
-                "display_ticker": formatted,
+            
+            # 保存市場行情數據
+            market_data_batch[original_name] = {
+                "display_name": f"{long_name} ({formatted})",
                 "price": float(latest_row['Close']),
                 "high": float(latest_row['High']),
                 "low": float(latest_row['Low']),
                 "volume": int(latest_row['Volume']),
-                "recent_trend": hist['Close'].tail(5).tolist()
+                "history_df": hist[['Close', 'MA20', 'UpperBand', 'LowerBand']].tail(40).to_json() # 轉為 JSON 快取，只取最近 40 天畫圖手機版最漂亮
             }
-            success_stocks.append(t)
+            success_stocks.append(original_name)
         except:
             pass
 
+    # 第二階段：智慧型分段 AI 深度解構 (只傳送核心趨勢，縮減 tokens 以完美防止 429 封鎖)
     ai_reports_dict = {}
     if success_stocks:
         try:
-            # 【第一段批次發送】：分析 1 ~ 4 項
-            prompt1 = f"你是一位擁有20年經驗的華爾街資深買方股票分析師。請針對數據池中的每一家公司進行前段投資解構，包含：1.執行摘要, 2.投資論點, 3.財務健康檢查, 4.估值評估。請使用中英文雙語生成 reports 列表。數據池：{json.dumps(market_data_batch, ensure_ascii=False)}"
+            # 建立一個極簡的數據集給 AI 分析，不要塞整張大 DataFrame 進去
+            ai_input_pool = {k: {
+                "name": v["display_name"], "price": v["price"], "high": v["high"], "low": v["low"]
+            } for k, v in market_data_batch.items()}
+            
+            prompt1 = f"你是一位擁有20年經驗的華爾街資深買方股票分析師。請針對數據池中的每一家公司進行前段投資解構，包含：1.執行摘要, 2.投資論點, 3.財務健康檢查, 4.估值評估。請使用中英文雙語生成 reports 列表。數據池：{json.dumps(ai_input_pool, ensure_ascii=False)}"
             response1 = client.models.generate_content(
                 model='gemini-2.5-flash', contents=prompt1,
                 config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=BatchPart1Schema, temperature=0.2),
             )
             raw_p1 = json.loads(response1.text).get("reports", [])
             
-            # 🌟【關鍵物理冷卻】：強制程式暫停 2 秒，消除極速連發特徵，完美欺騙 Google 防刷機制
-            time.sleep(2.0)
+            time.sleep(2.0) # 強制物理冷卻防止刷流量
             
-            # 【第二段批次發送】：分析 5 ~ 7 項與評級結論
             prompt2 = f"你是一位資深買方分析師。請根據剛才生成的上半部報告，繼續為這批公司完成下半部深度點評，包含：5.競爭護城河與同業比較, 6.潛在風險提示, 7.綜合投資評級結論與行動建議。請使用中英文雙語。上半部數據參考：{response1.text}"
             response2 = client.models.generate_content(
                 model='gemini-2.5-flash', contents=prompt2,
@@ -157,88 +190,97 @@ def fetch_all_and_analyze_batch(tickers):
             data = market_data_batch[t]
             
             if t not in ai_reports_dict:
-                rescue_res = analyze_single_stock_rescue(t, data)
+                rescue_res = analyze_single_stock_rescue(t, {"name": data["display_name"], "price": data["price"]})
                 if rescue_res["success"]:
                     final_output[t] = {
-                        "state": "REPORT_COMPLETE",
+                        "state": "REPORT_COMPLETE", "display_name": data["display_name"],
                         "price": data["price"], "high": data["high"], "low": data["low"], "volume": data["volume"],
-                        "report": rescue_res["data"]
+                        "history_df": data["history_df"], "report": rescue_res["data"]
                     }
                 else:
                     final_output[t] = {
-                        "state": "MARKET_DATA_ONLY",
+                        "state": "MARKET_DATA_ONLY", "display_name": data["display_name"],
                         "price": data["price"], "high": data["high"], "low": data["low"], "volume": data["volume"],
-                        "error": rescue_res['error']
+                        "history_df": data["history_df"], "error": rescue_res['error']
                     }
             else:
                 final_output[t] = {
-                    "state": "REPORT_COMPLETE",
+                    "state": "REPORT_COMPLETE", "display_name": data["display_name"],
                     "price": data["price"], "high": data["high"], "low": data["low"], "volume": data["volume"],
-                    "report": ai_reports_dict[t]
+                    "history_df": data["history_df"], "report": ai_reports_dict[t]
                 }
         else:
-            final_output[t] = {"state": "DATA_DOWNLOAD_FAILED", "error": "基礎行情數據下載超時，可能是海外機房連線異常。"}
+            final_output[t] = {"state": "FAILED", "error": f"找不到符合 '{t}' 的股票或行情數據下載失敗。"}
             
     return final_output
 
 # 5. 主畫面手機優化直式面板渲染
-with st.spinner("🕵️‍♂️ 華爾街資深分析師正在利用防刷雙階段模型解構財報，請稍候..."):
-    results = fetch_all_and_analyze_batch(ticker_list)
+with st.spinner("🕵️‍♂️ 華爾街資深分析師正在利用雙階段模型解構財報並計算布林軌道，請稍候..."):
+    results = fetch_all_and_analyze_batch(raw_ticker_list)
 
-for t in ticker_list:
+for t in raw_ticker_list:
     res = results.get(t, {"state": "FAILED", "error": "未知錯誤"})
     
     with st.container():
-        if res["state"] == "REPORT_COMPLETE":
+        if res["state"] in ["REPORT_COMPLETE", "MARKET_DATA_ONLY"]:
             p = res['price']
             price_str = f"${p:.2f}" if isinstance(p, (int, float)) else f"{p}"
             v = res['volume']
             vol_str = f"{v:,}" if isinstance(v, (int, float)) else f"{v}"
             
-            st.markdown(f"## 🏢 投資標的：{t}")
+            # 🌟 亮點一：投資標的同步顯示代碼與中文官方全名
+            st.markdown(f"## 🏢 {res['display_name']}")
             st.markdown(f"**即時現價：** `{price_str}` | **今日最高/最低：** `{res['high']:.2f}` / `{res['low']:.2f}` | **今日成交量：** `{vol_str}`")
             
-            report_data = res["report"]
-            
-            rating_str = report_data.get("final_verdict_rating", "Not Rated")
-            if "買" in rating_str or "Buy" in rating_str:
-                st.success(f"🎯 **機構綜合投資結論 (Final Verdict Rating)：{rating_str}**")
-            elif "賣" in rating_str or "Sell" in rating_str:
-                st.error(f"🎯 **機構綜合投資結論 (Final Verdict Rating)：{rating_str}**")
+            # 🌟 亮點二：全自動日線與布林代數曲線技術圖表 (Bollinger Bands Chart)
+            try:
+                chart_df = pd.read_json(res["history_df"])
+                # 重新命名以便圖表標籤更乾淨專業
+                chart_df.columns = ['收盤價 (Close)', '20日均線 (MA20)', '布林上軌 (Upper Band)', '布林下軌 (Lower Band)']
+                st.line_chart(chart_df, height=220) # 220高最符合手機直式滑動視覺
+            except Exception as chart_err:
+                st.caption(f"技術圖表渲染暫時超載: {chart_err}")
+
+            # 🌟 亮點三：嚴格合規 — 只有當 7 大面向完美生成，才吐出最終 conclusions 評級看板
+            if res["state"] == "REPORT_COMPLETE":
+                report_data = res["report"]
+                rating_str = report_data.get("final_verdict_rating", "Not Rated")
+                if "買" in rating_str or "Buy" in rating_str:
+                    st.success(f"🎯 **機構綜合投資結論 (Final Verdict Rating)：{rating_str}**")
+                elif "賣" in rating_str or "Sell" in rating_str:
+                    st.error(f"🎯 **機構綜合投資結論 (Final Verdict Rating)：{rating_str}**")
+                else:
+                    st.warning(f"🎯 **機構綜合投資結論 (Final Verdict Rating)：{rating_str}**")
+                    
+                # 手機版折疊式深度報告手風琴
+                with st.expander("🔍 1. 執行摘要 (Executive Summary)"):
+                    st.write(report_data.get("executive_summary"))
+                    
+                with st.expander("⚡ 2. 投資論點 (Investment Thesis)"):
+                    st.write(report_data.get("investment_thesis"))
+                    
+                with st.expander("🩺 3. 財務健康檢查 (Financial Health)"):
+                    st.write(report_data.get("financial_health"))
+                    
+                with st.expander("⚖️ 4. 估值評估 (Valuation)"):
+                    st.write(report_data.get("valuation"))
+                    
+                with st.expander("🛡️ 5. 競爭護城河與同業比較 (Moat & Competitors)"):
+                    st.write(report_data.get("moat_competitors"))
+                    
+                with st.expander("🚨 6. 潛在風險提示 (Risk Factors)"):
+                    st.write(report_data.get("risk_factors"))
+                    
+                with st.expander("📢 7. 總結與行動建議 (Action)"):
+                    st.info(f"**核心操作邏輯支撑：**\n{report_data.get('final_verdict_logic')}")
             else:
-                st.warning(f"🎯 **機構綜合投資評級 (Final Verdict Rating)：{rating_str}**")
-                
-            with st.expander("🔍 1. 執行摘要 (Executive Summary)"):
-                st.write(report_data.get("executive_summary", "載入中..."))
-                
-            with st.expander("⚡ 2. 投資論點 (Investment Thesis)"):
-                st.write(report_data.get("investment_thesis", "載入中..."))
-                
-            with st.expander("🩺 3. 財務健康檢查 (Financial Health)"):
-                st.write(report_data.get("financial_health", "載入中..."))
-                
-            with st.expander("⚖️ 4. 估值評估 (Valuation)"):
-                st.write(report_data.get("valuation", "載入中..."))
-                
-            with st.expander("🛡️ 5. 競爭護城河與同業比較 (Moat & Competitors)"):
-                st.write(report_data.get("moat_competitors", "載入中..."))
-                
-            with st.expander("🚨 6. 潛在風險提示 (Risk Factors)"):
-                st.write(report_data.get("risk_factors", "載入中..."))
-                
-            with st.expander("📢 7. 總結與行動建議 (Action)"):
-                st.info(f"**核心操作邏輯支撑：**\n{report_data.get('final_verdict_logic', '載入中...')}")
+                # MARKET_DATA_ONLY 情況：有圖、有行情，但無結論（因 429 冷卻懲罰中）
+                st.warning(f"⚠️ **無法給予 conclusions**：{res['error']}。")
+                st.caption("提示：由於 Google 流量管制，此標的暫無 conclusions 看板。請等待 30 秒後，點擊左側「🔄 同步更新全部數據」重新嘗試數據解構。")
         
-        elif res["state"] == "MARKET_DATA_ONLY":
-            p = res['price']
-            price_str = f"${p:.2f}" if isinstance(p, (int, float)) else f"{p}"
-            st.markdown(f"## 🏢 投資標的：{t}")
-            st.markdown(f"**即時現價：** `{price_str}` | **今日最高/最低：** `{res['high']:.2f}` / `{res['low']:.2f}`")
-            st.warning(f"⚠️ **無法給予 conclusions**：{res['error']}。")
-            st.caption("提示：由於 Google 伺服器冷卻懲罰生效中，該標的暫無 conclusions 看板。請至 Google AI Studio 產生新 Key 貼上，或等待冷卻結束後，點擊左側「🔄 同步更新全部數據」。")
-            
         else:
-            st.error(f"❌ 股票代碼 **{t}** 基礎行情下載失敗。")
-            st.caption(f"提示原因：{res.get('error')}。")
+            # 基礎行情完全失敗
+            st.error(f"❌ 股票標的 **{t}** 基礎行情載入失敗。")
+            st.caption(f"原因提示：{res.get('error')}")
             
         st.markdown("<br><hr style='margin:15px 0px; border-top: 2px dashed opacity:0.3;'>", unsafe_allow_html=True)
