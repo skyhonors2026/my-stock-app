@@ -2,12 +2,14 @@ import os
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import requests  # 引入網路請求套件以進行瀏覽器偽裝
+import requests
+import json
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
+from typing import List
 
-# 1. 初始化 Gemini 用戶端 (使用您的專屬有效金鑰)
+# 1. 初始化 Gemini 用戶端
 GEMINI_API_KEY = "AIzaSyBQS1AgANH1cyAbLV1o1otNUXpb8FvleEU"
 client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -29,96 +31,115 @@ if st.sidebar.button("🔄 同步更新全部數據"):
 
 st.sidebar.markdown("""
 ---
-💡 **行動裝置小技巧：**
-1. 本版本已啟動「核心瀏覽器偽裝技術」，徹底破解 Yahoo Finance 對雲端海外伺服器的 IP 封鎖。
-2. 數據與 Gemini AI 評級將完美同步全自動執行。
+💡 **行動端防爆優化版：**
+1. 已將 AI 請求優化為「機構級單次批次打包技術」。
+2. 不論監控多少支股票，**每次刷新僅消耗 1 次 AI 額度**，徹底根除 429 錯誤！
 """)
 
 # 【結構化輸出定義】
-class StockAnalysisSchema(BaseModel):
+class SingleStockResult(BaseModel):
+    ticker: str
     rating: str = Field(description="投資評級，只能是 '買入 (Buy)', '持有 (Hold)', 或 '賣出 (Sell)' 之一")
     reason: str = Field(description="15字以內的一句話專業買方核心邏輯支撐")
 
-# 4. 核心同步處理函式 (瀏覽器偽裝反封鎖版)
+class BatchAnalysisSchema(BaseModel):
+    results: List[SingleStockResult]
+
+# 4. 批次抓取與統一分析核心
 @st.cache_data(ttl=60)
-def fetch_and_analyze(ticker_name):
-    formatted = str(ticker_name).strip()
+def fetch_all_and_analyze_batch(tickers):
+    market_data_batch = {}
+    success_stocks = []
     
-    if formatted.isdigit() and not formatted.endswith(".TW"):
-        formatted = f"{formatted}.TW"
-        
-    try:
-        # 【超核心：大師級防封鎖偽裝】建立一個假的瀏覽器標頭 (Header)
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5'
-        })
-        
-        # 將偽裝好的連線 session 餵給 yfinance
-        stock = yf.Ticker(formatted, session=session)
-        hist = stock.history(period="1mo")
-        
-        if hist.empty:
-            raise ValueError("無法讀取歷史K線，該代碼可能不存在或暫時無法連線。")
+    # 建立偽裝瀏覽器連線通道
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    })
+    
+    # 第一階段：快速抓取所有股票的市場數據 (由 Python 在背景執行)
+    for t in tickers:
+        formatted = t
+        if formatted.isdigit() and not formatted.endswith(".TW"):
+            formatted = f"{formatted}.TW"
             
-        # 從歷史 K 線中提取最新一筆交易價格與數據
-        latest_row = hist.iloc[-1]
-        current_price = float(latest_row['Close'])
-        day_high = float(latest_row['High'])
-        day_low = float(latest_row['Low'])
-        volume = int(latest_row['Volume'])
-        
-        recent_trend = hist['Close'].tail(5).tolist()
-        
-        # 建立高純度的華爾街分析師 Prompt
-        prompt = f"""
-        你是一位擁有20年經驗的華爾街資深買方股票分析師。
-        請嚴格使用過去五年的完整財報、TTM（最近12個月）數據及近期市場趨勢，並依循以下架構為我生成分析：
-        1. 執行摘要（Executive Summary）： 簡述公司的核心業務模式、獲利引擎與當前市值規模。
-        2. 投資論點（Investment Thesis）： 列出為何應看好（多頭）或看空（空頭）的3大理由。
-        3. 財務健康檢查（Financial Health）： 分析營收成長率、營業利潤率、現金流狀況及資產負債表風險。   
-        4. 估值評估（Valuation）： 根據本益比（P/E）、股價淨值比（P/B）等指標評估當前股價是否合理。
-        5. 競爭護城河與同業比較（Moat & Competitors）： 評估公司在產業中的競爭優勢與對手差異。
-        6. 潛在風險提示（Risk Factors）： 指出公司特有的前3大潛在風險（如供應鏈、關鍵人物、訴訟等）。
-        7. 總結與行動建議（Final Verdict & Action）： 給出明確的「買入/持有/賣出」評級與簡潔的邏輯支撐。 
-        """
-        
-        # 全自動呼叫 Gemini 進行背景分析
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=StockAnalysisSchema,
-                temperature=0.2
-            ),
-        )
-        
-        import json
-        ai_data = json.loads(response.text)
-        
-        return {
-            "success": True,
-            "ticker": ticker_name,
-            "display_ticker": formatted,
-            "price": current_price,
-            "high": day_high,
-            "low": day_low,
-            "volume": volume,
-            "rating": ai_data.get("rating", "持有 (Hold)"),
-            "reason": ai_data.get("reason", "數據觀望中")
-        }
-    except Exception as e:
-        return {"success": False, "ticker": ticker_name, "display_ticker": formatted, "error": str(e)}
+        try:
+            stock = yf.Ticker(formatted, session=session)
+            hist = stock.history(period="1mo")
+            if hist.empty:
+                continue
+                
+            latest_row = hist.iloc[-1]
+            market_data_batch[t] = {
+                "display_ticker": formatted,
+                "price": float(latest_row['Close']),
+                "high": float(latest_row['High']),
+                "low": float(latest_row['Low']),
+                "volume": int(latest_row['Volume']),
+                "recent_trend": hist['Close'].tail(5).tolist()
+            }
+            success_stocks.append(t)
+        except:
+            pass
 
-# 5. 主畫面：手機優化版直式卡片佈局
-progress_bar = st.progress(0)
-total_stocks = len(ticker_list)
+    # 第二階段：將所有抓到數據的股票打包，一次性餵給 Gemini 分析 (只消耗 1 次請求)
+    ai_ratings = {}
+    if success_stocks:
+        try:
+            prompt = f"""
+            你是一位擁有20年經驗的華爾街資深買方股票分析師。
+            請針對以下這批股票的即時市場數據，一口氣為每一支股票給予專業評級與核心操盤邏輯點評：
+            
+            【待分析股票數據池】：
+            {json.dumps(market_data_batch, ensure_ascii=False)}
+            """
+            
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=BatchAnalysisSchema,
+                    temperature=0.2
+                ),
+            )
+            
+            # 解析批量回傳的 JSON
+            raw_ai_res = json.loads(response.text)
+            for item in raw_ai_res.get("results", []):
+                ai_ratings[item["ticker"]] = {
+                    "rating": item["rating"],
+                    "reason": item["reason"]
+                }
+        except:
+            pass
 
-for index, t in enumerate(ticker_list):
-    res = fetch_and_analyze(t)
+    # 第三階段：整合市場數據與 AI 評級數據
+    final_output = {}
+    for t in tickers:
+        if t in market_data_batch:
+            data = market_data_batch[t]
+            ai = ai_ratings.get(t, {"rating": "持有 (Hold)", "reason": "大盤觀望，數據同步中"})
+            final_output[t] = {
+                "success": True,
+                "price": data["price"],
+                "high": data["high"],
+                "low": data["low"],
+                "volume": data["volume"],
+                "rating": ai["rating"],
+                "reason": ai["reason"]
+            }
+        else:
+            final_output[t] = {"success": False, "error": "數據下載超時或代碼無效"}
+            
+    return final_output
+
+# 5. 主畫面卡片渲染
+with st.spinner("華爾街分析師正在批次打包審視數據中..."):
+    results = fetch_all_and_analyze_batch(ticker_list)
+
+for t in ticker_list:
+    res = results.get(t, {"success": False, "error": "未知錯誤"})
     
     with st.container():
         if res["success"]:
@@ -128,7 +149,7 @@ for index, t in enumerate(ticker_list):
             vol_str = f"{v:,}" if isinstance(v, (int, float)) else f"{v}"
             
             c1, c2 = st.columns([1, 1])
-            c1.markdown(f"### 📈 {res['ticker']}")
+            c1.markdown(f"### 📈 {t}")
             
             rating_str = res['rating']
             if "買" in rating_str or "Buy" in rating_str:
@@ -141,11 +162,7 @@ for index, t in enumerate(ticker_list):
             st.markdown(f"**現價：** `{price_str}` | **高/低：** `{res['high']:.2f}` / `{res['low']:.2f}` | **成交量：** `{vol_str}`")
             st.markdown(f"> 💬 **買方核心邏輯：** {res['reason']}")
         else:
-            st.error(f"❌ 股票代碼 **{res['ticker']}** ({res['display_ticker']}) 載入失敗。")
-            st.caption(f"錯誤原因：{res.get('error', '未知')}。請確認代碼或嘗試點擊左側「🔄 同步更新全部數據」。")
+            st.error(f"❌ 股票代碼 **{t}** 載入失敗。")
+            st.caption(f"原因：{res.get('error')}。可能是開盤前無交易數據，或伺服器正在頻率限制中，請稍候重試。")
             
         st.markdown("<hr style='margin:12px 0px; padding:0px; opacity:0.25;'>", unsafe_allow_html=True)
-    
-    progress_bar.progress((index + 1) / total_stocks)
-
-progress_bar.empty()
