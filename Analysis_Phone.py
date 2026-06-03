@@ -1,28 +1,31 @@
 import os
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
+from twelvedata import TDClient
 
-# 1. 初始化 Gemini 用戶端 (已填入您的專屬 API Key)
-api_key = "81a265563956411097b22208aad7b96e"
-client = genai.Client(api_key=api_key)
+# 1. 初始化金融數據與 Gemini API 用戶端
+# 請在此處填入您專屬的 API Key
+TWELVEDATA_API_KEY = "YOUR_TWELVEDATA_API_KEY" 
+GEMINI_API_KEY = "AIzaSyBQS1AgANH1cyAbLV1o1otNUXpb8FvleEU"
 
-# 2. 設定網頁版面 (針對手機直式螢幕進行優化)
+td = TDClient(apikey=TWELVEDATA_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
+
+# 2. 設定網頁版面 (針對手機直式螢幕優化)
 st.set_page_config(layout="centered", page_title="Mobile Stock Monitor")
 st.title("📱 華爾街行動自訂監控面板")
 
-# 3. 側邊欄控制台：支援 20-50 支股票輸入
+# 3. 側邊欄控制台
 st.sidebar.header("控制台 | Settings")
 default_stocks = "4966, 0050, 00919, NVDA, AAPL"
 raw_input = st.sidebar.text_area("輸入股票代碼 (用逗號隔開):", value=default_stocks, height=120)
 
-# 處理代碼字串轉換，去除前後空白並轉大寫
+# 處理代碼字串轉換
 ticker_list = [t.strip().upper() for t in raw_input.split(",") if t.strip()]
 
-# 強制清除快取同步按鈕
 if st.sidebar.button("🔄 同步更新全部數據"):
     st.cache_data.clear()
     st.rerun()
@@ -30,9 +33,8 @@ if st.sidebar.button("🔄 同步更新全部數據"):
 st.sidebar.markdown("""
 ---
 💡 **行動裝置小技巧：**
-1. 支援同時監控多支台股與美股。
-2. 台股只需輸入純數字（如 `4966`），系統會自動補上 `.TW`。
-3. 本版本已針對雲端海外伺服器進行「防阻擋最佳化」，大幅提升連線穩定度。
+1. 本版本已換裝「機構級專用 API 資料源」，徹底解決 yfinance 被海外雲端伺服器封鎖的問題。
+2. 台股與美股代碼皆可無縫全自動辨識與評級。
 """)
 
 # 【結構化輸出定義】
@@ -40,30 +42,32 @@ class StockAnalysisSchema(BaseModel):
     rating: str = Field(description="投資評級，只能是 '買入 (Buy)', '持有 (Hold)', 或 '賣出 (Sell)' 之一")
     reason: str = Field(description="15字以內的一句話專業買方核心邏輯支撐")
 
-# 4. 核心同步處理函式 (跨國雲端環境防阻擋優化版)
-@st.cache_data(ttl=60) # 縮短快取至60秒
+# 4. 核心同步處理函式 (Twelvedata 機構級高穩定版)
+@st.cache_data(ttl=60)
 def fetch_and_analyze(ticker_name):
     formatted = str(ticker_name).strip()
     
-    if formatted.isdigit() and not formatted.endswith(".TW"):
+    # 判斷台股並處理為國際通用交易所後綴
+    if formatted.isdigit():
+        # Twelvedata 辨識台灣股票需使用 .TW 格式
         formatted = f"{formatted}.TW"
         
     try:
-        # 向 yfinance 要求歷史數據（歷史走勢在海外雲端最不容易被封鎖）
-        stock = yf.Ticker(formatted)
-        hist = stock.history(period="1mo")
+        # 向 Twelvedata 發出即時報價與歷史 K 線請求
+        ts = td.time_series(symbol=formatted, interval="1day", outputsize=5)
+        candles = ts.as_pandas()
         
-        if hist.empty:
-            raise ValueError("海外伺服器連線超時，暫時無法讀取歷史K線。")
+        if candles.empty:
+            raise ValueError("此股票代碼在當前市場無效或未開盤。")
             
-        # 【核心修正】不使用常被海外機房封鎖的 stock.info，直接從 hist 提取最準確的即時交易數據
-        latest_row = hist.iloc[-1]
-        current_price = latest_row['Close']
-        day_high = latest_row['High']
-        day_low = latest_row['Low']
-        volume = latest_row['Volume']
+        # 提取最新一筆收盤資訊
+        latest_data = candles.iloc[0] # DataFrame 預設最新一天在最上面
+        current_price = float(latest_data['close'])
+        day_high = float(latest_data['high'])
+        day_low = float(latest_data['low'])
+        volume = int(latest_data['volume'])
         
-        recent_trend = hist['Close'].tail(5).tolist()
+        recent_trend = candles['close'].head(5).tolist()
         
         # 建立高純度的華爾街分析師 Prompt
         prompt = f"""
@@ -131,17 +135,11 @@ for index, t in enumerate(ticker_list):
             else:
                 c2.markdown(f"### <span style='color:#ffc107; float:right;'>🟡 {rating_str}</span>", unsafe_allow_html=True)
             
-            # 高低價格式化輸出
-            h = res['high']
-            l = res['low']
-            high_str = f"{h:.2f}" if isinstance(h, (int, float)) else str(h)
-            low_str = f"{l:.2f}" if isinstance(l, (int, float)) else str(l)
-            
-            st.markdown(f"**現價：** `{price_str}` | **高/低：** `{high_str}` / `{low_str}` | **成交量：** `{vol_str}`")
+            st.markdown(f"**現價：** `{price_str}` | **高/低：** `{res['high']:.2f}` / `{res['low']:.2f}` | **成交量：** `{vol_str}`")
             st.markdown(f"> 💬 **買方核心邏輯：** {res['reason']}")
         else:
-            st.error(f"❌ 股票代碼 **{res['ticker']}** ({res['display_ticker']}) 數據下載超時。")
-            st.caption(f"提示：已啟動備用防封鎖機制，如仍失敗，代表 Yahoo Finance 海外節點當前負載過高，請點擊左側「🔄 同步更新全部數據」重試。")
+            st.error(f"❌ 股票代碼 **{res['ticker']}** ({res['display_ticker']}) 載入失敗。")
+            st.caption(f"錯誤原因：{res.get('error', '未知')}。請確認代碼或檢查 Twelvedata API Key 是否正確輸入。")
             
         st.markdown("<hr style='margin:12px 0px; padding:0px; opacity:0.25;'>", unsafe_allow_html=True)
     
