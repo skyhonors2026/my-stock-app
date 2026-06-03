@@ -8,7 +8,7 @@ from twelvedata import TDClient
 
 # 1. 初始化金融數據與 Gemini API 用戶端
 # 請在此處填入您專屬的 API Key
-TWELVEDATA_API_KEY = "YOUR_TWELVEDATA_API_KEY" 
+TWELVEDATA_API_KEY = "81a265563956411097b22208aad7b96e" 
 GEMINI_API_KEY = "AIzaSyBQS1AgANH1cyAbLV1o1otNUXpb8FvleEU"
 
 td = TDClient(apikey=TWELVEDATA_API_KEY)
