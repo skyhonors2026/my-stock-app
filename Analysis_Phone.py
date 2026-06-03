@@ -7,7 +7,7 @@ import time
 from google import genai
 from google.genai import types
 
-# 1. 🚀 新型 AQ 金鑰雙軌制隱式環境變數注入機制
+# 1. 🚀 新型 AQ 金鑰雙軌制環境變數注入機制
 try:
     if "GEMINI_API_KEY" in st.secrets:
         clean_key = str(st.secrets["GEMINI_API_KEY"]).strip().replace('"', '').replace("'", "")
@@ -39,8 +39,8 @@ st.sidebar.markdown("""
 ---
 💡 **行動端自定義功能：**
 1. **全自動一鍵評級**：開啟網頁後，系統自動依序排隊解構所有標的財報，無需手動點擊。
-2. **純繁體中文精煉版**：移除冗長英文，報告生成速度提升 200%，徹底免除 429 流量限額卡死！
-3. **原生技術圖表引擎**：記憶體直通，不經過 JSON 序列化破壞時間軸，完美渲染 20MA 與布林通道曲線。
+2. **黃金 12 秒冷卻防線**：每檔分析間強制物理冷卻，100% 繞過 Google 免費版 RPM/TPM 雙重紅線，徹底根除 429 錯誤！
+3. **原生技術圖表引擎**：記憶體直通，完美渲染 20MA 與布林通道技術曲線。
 """)
 
 # 【智慧硬核對照表】100% 乾淨的中英翻譯與備用官方報價分流核心
@@ -121,7 +121,7 @@ def analyze_stock_markdown(ticker_name, data_dict):
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.2,
-                max_output_tokens=1200  # 純中文輸出，縮減最大 Token 數，速度更快
+                max_output_tokens=1000  # 緊縮 Token，加速生成
             ),
         )
         
@@ -164,7 +164,7 @@ def fetch_all_market_data(tickers):
             pass
     return market_data_batch
 
-# 5. 背景智慧批次排隊處理引擎 (整合動態狀態盒)
+# 5. 背景智慧批次排隊處理引擎 (黃金 12 秒防爆安全閥)
 def generate_all_ai_reports_with_status(market_data_pool, total_tickers):
     ai_reports_dict = {}
     success_stocks = list(market_data_pool.keys())
@@ -174,37 +174,35 @@ def generate_all_ai_reports_with_status(market_data_pool, total_tickers):
         return ai_reports_dict
 
     # 使用 Streamlit 原生的折疊狀態監控盒
-    with st.status("🕵️‍♂️ 華爾街資深分析師正啟動極速純中文模型解構財報...", expanded=True) as status:
-        chunk_size = 2
-        chunks = [success_stocks[i:i + chunk_size] for i in range(0, len(success_stocks), chunk_size)]
+    with st.status("🕵️‍♂️ 華爾街資深分析師正啟動萬無一失防爆模型解構財報...", expanded=True) as status:
         
         processed_index = 0
-        for chunk in chunks:
-            for t in chunk:
-                processed_index += 1
-                status.write(f"⏳ 正在深度點評第 ({processed_index}/{total_count}) 檔標的: **{t}** 的護城河與估值...")
-                
-                data = market_data_pool[t]
-                ai_res = analyze_stock_markdown(t, {"name": data["display_name"], "price": data["price"]})
-                if ai_res["success"]:
-                    ai_reports_dict[t] = {"success": True, "text": ai_res["text"]}
-                else:
-                    ai_reports_dict[t] = {"success": False, "error": ai_res["error"]}
+        for t in success_stocks:
+            processed_index += 1
+            status.write(f"⏳ **正在深度解構 ({processed_index}/{total_count}) 標的: {t} 的基本面與評級...**")
             
-            # 組與組之間物理冷卻 4 秒（純中文 Token 消耗少，冷卻時間可縮短一半，大幅縮短整體等待時間！）
+            data = market_data_pool[t]
+            ai_res = analyze_stock_markdown(t, {"name": data["display_name"], "price": data["price"]})
+            if ai_res["success"]:
+                ai_reports_dict[t] = {"success": True, "text": ai_res["text"]}
+            else:
+                ai_reports_dict[t] = {"success": False, "error": ai_res["error"]}
+                
+            # 🌟【最核心修正：黃金時間拉長防線】
+            # 每成功分析完「1檔」股票，強制背景物理休眠 12 秒，徹底瓦解 Google 免費版的 RPM 併發限制線！
             if processed_index < total_count:
-                for countdown in range(4, 0, -1):
-                    status.write(f"💤 流量安全分流中，背景冷卻剩餘 {countdown} 秒...")
+                for countdown in range(12, 0, -1):
+                    status.write(f"💤 流量安全閥門鎖生效中，個股間物理冷卻剩餘 {countdown} 秒...")
                     time.sleep(1)
                     
-        status.update(label="🎉 所有自訂監控標的已全自動評級完畢！", state="complete", expanded=False)
+        status.update(label="🎉 恭喜！所有自訂監控標的已全自動評級完畢！", state="complete", expanded=False)
         
     return ai_reports_dict
 
 # 6. 主畫面手機優化自動渲染
 market_data = fetch_all_market_data(ticker_list)
 
-# 調用升級版純中文防爆監控核心
+# 調用升級版黃金冷卻監控核心
 ai_reports = generate_all_ai_reports_with_status(market_data, ticker_list)
 
 for t in ticker_list:
