@@ -37,9 +37,9 @@ if st.sidebar.button("🔄 同步更新全部數據"):
 
 st.sidebar.markdown("""
 ---
-💡 **行動端防爆終極版技巧：**
-1. **新型憑證相容**：採用雙軌隱式環境變數注入，全面解鎖 2026 最新 AQ 字串授權。
-2. **高兼容 Markdown 引擎**：拋棄易超時的 JSON 結構化解析，AI 反應速度暴增 10 倍，100% 拒絕卡死！
+💡 **行動端自定義功能：**
+1. **全自動一鍵評級**：開啟網頁後，系統自動依序排隊解構所有標的財報，無需手動點擊。
+2. **中英雙語對照**：所有深度報告皆以 Bilingual 格式呈現，符合機構合規偏好。
 3. **原生技術圖表引擎**：記憶體直通，不經過 JSON 序列化破壞時間軸，完美渲染 20MA 與布林通道曲線。
 """)
 
@@ -90,7 +90,7 @@ def analyze_stock_markdown(ticker_name, data_dict):
         你是一位擁有20年經驗的華爾街資深買方股票分析師。请針對目標公司 {ticker_name} 的即時數據進行全面、深度且客觀的綜合投資分析報告。
         當前標的最新市況：{json.dumps(data_dict)}
         
-        請嚴格遵循以下 7 大範疇框架，完全使用「繁體中文」輸出，並在報告最後給出明確的投資結論。
+        請嚴格遵循以下 7 大範疇框架，完全使用「繁體中文」與「英文」雙語對照輸出（Traditional Chinese & English Bilingual Format），並在報告最後給出明確的投資結論。
         
         【報告格式規範】：
         ### 🔍 1. 執行摘要 (Executive Summary)
@@ -106,13 +106,13 @@ def analyze_stock_markdown(ticker_name, data_dict):
         (評估當前股價是否合理)
         
         ### 🛡️ 5. 競爭護城河與同業比較 (Moat & Competitors)
-        (分析競爭優勢與對手差異)
+        (分析競爭優优势與對手差異)
         
         ### 🚨 6. 潛在風險提示 (Risk Factors)
         (指出公司特有的前3大潛在風險)
         
         ### 📢 7. 總結與最終行動建議 (Final Verdict)
-        【機構綜合投資結論】：[此處必須明確包含 '買入 (Buy)', '持有 (Hold)', 或 '賣出 (Sell)' 之一]
+        【機構綜合投資結論 / Final Verdict Rating】：[此處必須明確包含 '買入 (Buy)', '持有 (Hold)', 或 '賣出 (Sell)' 之一]
         核心操作邏輯支撐...
         """
         
@@ -121,16 +121,17 @@ def analyze_stock_markdown(ticker_name, data_dict):
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.2,
-                max_output_tokens=1500
+                max_output_tokens=2000
             ),
         )
-        if response.text:
-            return {"success": True, "text": response.text}
+        
+        if response and response.text:
+            return {"success": True, "text": str(response.text).strip()}
         return {"success": False, "error": "AI 回傳了空報告"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# 4. 核心數據調度與快取
+# 4. 核心數據調度快取引擎
 @st.cache_data(ttl=60)
 def fetch_all_market_data(tickers):
     market_data_batch = {}
@@ -163,8 +164,34 @@ def fetch_all_market_data(tickers):
             pass
     return market_data_batch
 
-# 5. 主畫面手機優化渲染
+# 5. 背景智慧批次排隊處理引擎 (全自動 Chunker)
+@st.cache_data(ttl=60)
+def generate_all_ai_reports(market_data_pool):
+    ai_reports_dict = {}
+    success_stocks = list(market_data_pool.keys())
+    
+    # 每 3 檔股票分為一組，自動冷卻發送，完美兼容最新 AQ 金鑰的 Burst Limit 限制
+    chunk_size = 3
+    chunks = [success_stocks[i:i + chunk_size] for i in range(0, len(success_stocks), chunk_size)]
+    
+    for chunk in chunks:
+        for t in chunk:
+            data = market_data_pool[t]
+            ai_res = analyze_stock_markdown(t, {"name": data["display_name"], "price": data["price"]})
+            if ai_res["success"]:
+                ai_reports_dict[t] = {"success": True, "text": ai_res["text"]}
+            else:
+                ai_reports_dict[t] = {"success": False, "error": ai_res["error"]}
+        # 小組群發完畢後，背景強迫物理冷卻 3.5 秒，確保雲端節點安全
+        time.sleep(3.5)
+    return ai_reports_dict
+
+# 6. 主畫面手機優化自動渲染
 market_data = fetch_all_market_data(ticker_list)
+
+with st.spinner("🕵️‍♂️ 華爾街資深分析師正在利用安全加密通道、排隊自動解構全套個股報告..."):
+    # 在網頁載入時直接全自動呼叫，不留任何人為按鈕
+    ai_reports = generate_all_ai_reports(market_data)
 
 for t in ticker_list:
     with st.container():
@@ -175,11 +202,11 @@ for t in ticker_list:
             v = data['volume']
             vol_str = f"{v:,}" if isinstance(v, (int, float)) else f"{v}"
             
-            # 行情基本資料
+            # 渲染基礎行情
             st.markdown(f"## 🏢 {data['display_name']}")
             st.markdown(f"**即時現價：** `{price_str}` | **今日最高/最低：** `{data['high']:.2f}` / `{data['low']:.2f}` | **今日成交量：** `{vol_str}`")
             
-            # 湛藍色高質感布林通道線圖
+            # 渲染布林通道曲線圖
             try:
                 chart_df = data["chart_df"].copy()
                 chart_df.columns = ['收盤價 (Close)', '20日均線 (MA20)', '布林上軌 (Upper Band)', '布林下軌 (Lower Band)']
@@ -187,31 +214,28 @@ for t in ticker_list:
             except:
                 st.caption("技術圖表渲染中...")
 
-            # 🌟【點擊展開深度報告】每支股票獨立按鈕，點下去才消耗 AI 額度並當場分析，100% 杜絕 429 與超時！
-            # 並且，只有當分析成功得出時，才會展現結論，完美執行「無分析資料就不進行評級」
-            if st.button(f"🕵️‍♂️ 啟動華爾街深度評級報告：{t}", key=f"btn_{t}"):
-                with st.spinner(f"正在全面解構 {t} 財報與護城河..."):
-                    # 故意在呼叫前加入微型延遲，徹底清除機器人特徵
-                    time.sleep(0.5)
-                    ai_res = analyze_stock_markdown(t, {"name": data["display_name"], "price": data["price"]})
+            # 全自動渲染深度評級報告 (Conclusions Earned, Post-Data)
+            ai_res = ai_reports.get(t, {"success": False, "error": "未進行分析"})
+            
+            if ai_res["success"]:
+                report_text = str(ai_res["text"])
+                
+                # 智慧識別投資結論橫幅
+                if "買入" in report_text or "Buy" in report_text:
+                    st.success("🎯 **機構綜合投資結論 / Final Verdict Rating：建議 買入 (Buy)**")
+                elif "賣出" in report_text or "Sell" in report_text:
+                    st.error("🎯 **機構綜合投資結論 / Final Verdict Rating：建議 賣出 (Sell)**")
+                else:
+                    st.warning("🎯 **機構綜合投資結論 / Final Verdict Rating：建議 持有 (Hold) 觀望**")
                     
-                    if ai_res["success"]:
-                        report_text = ai_res["text"]
-                        
-                        # 智慧識別投資結論橫幅（Conclusions Banner）
-                        if "買入" in report_text or "Buy" in report_text:
-                            st.success("🎯 **機構綜合投資結論：建議 買入 (Buy)**")
-                        elif "賣出" in report_text or "Sell" in report_text:
-                            st.error("🎯 **機構綜合投資結論：建議 賣出 (Sell)**")
-                        else:
-                            st.warning("🎯 **機構綜合投資結論：建議 持有 (Hold) 觀望**")
-                            
-                        # 漂亮渲染 Markdown 全套七大面向報告
-                        st.markdown("---")
-                        st.markdown(report_text)
-                        st.markdown("---")
-                    else:
-                        st.warning(f"⚠️ **無法給予 conclusions**：{ai_res['error']}。請稍候 5 秒鐘再次點擊嘗試。")
+                # 展開全套中英雙語 Markdown 報告本文
+                st.markdown("---")
+                st.markdown(report_text)
+                st.markdown("---")
+            else:
+                # 嚴格執行買方合規：無報告本文，絕不出具盲目結論與評級
+                st.warning(f"⚠️ **無法完全給予 conclusions**：{ai_res['error']}。")
+                st.caption("提示：請前往 Streamlit 後台檢查 Secrets 中的金鑰設定是否正確。")
         else:
             st.error(f"❌ 股票標的 **{t}** 基礎行情載入失敗。")
             
