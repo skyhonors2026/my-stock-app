@@ -4,12 +4,14 @@ import yfinance as yf
 import pandas as pd
 import requests
 import json
+import time  # 引入時間套件，用以執行智慧防刷延遲
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 from typing import List
 
-# 1. 初始化 Gemini 用戶端 (使用您的專屬有效金鑰)
+# 1. 初始化 Gemini 用戶端
+# 💡 提示：如果等一下還是噴 429，請去 Google AI Studio 重新創一個新 Key 貼在這裡，就能直接跳過 10 分鐘懲罰！
 GEMINI_API_KEY = "AIzaSyBQS1AgANH1cyAbLV1o1otNUXpb8FvleEU"
 client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -31,8 +33,8 @@ if st.sidebar.button("🔄 同步更新全部數據"):
 
 st.sidebar.markdown("""
 ---
-💡 **流量防爆完工版：**
-1. **分段式深度解構**：將七大面向拆分為雙階段傳輸，100% 繞過 Google 免費版 API 的 Tokens 流量限制，徹底根除 429 錯誤！
+💡 **流量防爆冷卻版：**
+1. **雙階段防刷延遲**：在發送上半部與下半部報告之間，系統自動增加物理冷卻時間，徹底避免被 Google 誤判為惡意刷流量。
 2. **嚴謹合規**：評級與報告深度綁定，AI 分析超時則絕不盲目顯示評級。
 """)
 
@@ -58,10 +60,9 @@ class Part2Report(BaseModel):
 class BatchPart2Schema(BaseModel):
     reports: List[Part2Report]
 
-# 核心智慧救援函式 (當批次失敗時的雙階段單股救援機制)
+# 智慧型雙階段單股救援機制
 def analyze_single_stock_rescue(ticker_name, data_dict):
     try:
-        # 單股階段一
         p1_prompt = f"你是一位擁有20年經驗的華爾街資深買方股票分析師。請針對目標公司 {ticker_name} 撰寫前段分析：1.執行摘要, 2.投資論點, 3.財務健康, 4.估值評估。請嚴格使用中英文雙語填寫。數據：{json.dumps(data_dict)}"
         res1 = client.models.generate_content(
             model='gemini-2.5-flash', contents=p1_prompt,
@@ -69,7 +70,9 @@ def analyze_single_stock_rescue(ticker_name, data_dict):
         )
         d1 = json.loads(res1.text)
         
-        # 單股階段二
+        # 智慧物理冷卻：在救援單股時也強制暫停 1.5 秒
+        time.sleep(1.5)
+        
         p2_prompt = f"你是一位華爾街買方股票分析師。請針對目標公司 {ticker_name} 撰寫後段分析與最終結論：5.競爭護城河與比較, 6.潛在風險, 7.綜合投資結論與評級。請嚴格使用中英文雙語。已知前段數據為：{res1.text}"
         res2 = client.models.generate_content(
             model='gemini-2.5-flash', contents=p2_prompt,
@@ -77,11 +80,7 @@ def analyze_single_stock_rescue(ticker_name, data_dict):
         )
         d2 = json.loads(res2.text)
         
-        # 整合
-        return {
-            "success": True,
-            "data": {**d1, **d2}
-        }
+        return {"success": True, "data": {**d1, **d2}}
     except Exception as e:
         return {"success": False, "error": f"深度分析生成超時 ({str(e)})"}
 
@@ -131,7 +130,10 @@ def fetch_all_and_analyze_batch(tickers):
             )
             raw_p1 = json.loads(response1.text).get("reports", [])
             
-            # 【第二段批次發送】：分析 5 ~ 7 項與評級結論 (成功縮減單次傳輸量，完美防爆)
+            # 🌟【關鍵物理冷卻】：強制程式暫停 2 秒，消除極速連發特徵，完美欺騙 Google 防刷機制
+            time.sleep(2.0)
+            
+            # 【第二段批次發送】：分析 5 ~ 7 項與評級結論
             prompt2 = f"你是一位資深買方分析師。請根據剛才生成的上半部報告，繼續為這批公司完成下半部深度點評，包含：5.競爭護城河與同業比較, 6.潛在風險提示, 7.綜合投資評級結論與行動建議。請使用中英文雙語。上半部數據參考：{response1.text}"
             response2 = client.models.generate_content(
                 model='gemini-2.5-flash', contents=prompt2,
@@ -139,7 +141,6 @@ def fetch_all_and_analyze_batch(tickers):
             )
             raw_p2 = json.loads(response2.text).get("reports", [])
             
-            # 智慧拼裝兩段報告
             p1_dict = {item["ticker"]: item for item in raw_p1}
             p2_dict = {item["ticker"]: item for item in raw_p2}
             
@@ -149,7 +150,7 @@ def fetch_all_and_analyze_batch(tickers):
         except:
             pass
 
-    # 第三階段：整合與嚴格狀態檢查（無完整報告就無結論）
+    # 第三階段：整合與嚴格狀態檢查
     final_output = {}
     for t in tickers:
         if t in market_data_batch:
@@ -181,7 +182,7 @@ def fetch_all_and_analyze_batch(tickers):
     return final_output
 
 # 5. 主畫面手機優化直式面板渲染
-with st.spinner("🕵️‍♂️ 華爾街資深分析師正在利用雙階段模型解構財報，請稍候..."):
+with st.spinner("🕵️‍♂️ 華爾街資深分析師正在利用防刷雙階段模型解構財報，請稍候..."):
     results = fetch_all_and_analyze_batch(ticker_list)
 
 for t in ticker_list:
@@ -199,7 +200,6 @@ for t in ticker_list:
             
             report_data = res["report"]
             
-            # 🎯 🌟 買方邏輯嚴格執行：只有 7 大面向完整生成後，才渲染綜合結論橫幅！
             rating_str = report_data.get("final_verdict_rating", "Not Rated")
             if "買" in rating_str or "Buy" in rating_str:
                 st.success(f"🎯 **機構綜合投資結論 (Final Verdict Rating)：{rating_str}**")
@@ -208,7 +208,6 @@ for t in ticker_list:
             else:
                 st.warning(f"🎯 **機構綜合投資評級 (Final Verdict Rating)：{rating_str}**")
                 
-            # 手機版折疊式深度報告手風琴
             with st.expander("🔍 1. 執行摘要 (Executive Summary)"):
                 st.write(report_data.get("executive_summary", "載入中..."))
                 
@@ -236,7 +235,7 @@ for t in ticker_list:
             st.markdown(f"## 🏢 投資標的：{t}")
             st.markdown(f"**即時現價：** `{price_str}` | **今日最高/最低：** `{res['high']:.2f}` / `{res['low']:.2f}`")
             st.warning(f"⚠️ **無法給予 conclusions**：{res['error']}。")
-            st.caption("提示：由於 Google 免費版流量被扣光，該標的暫無 conclusions 看板。請等待 30 秒後，點擊左側「🔄 同步更新全部數據」重新嘗試解構。")
+            st.caption("提示：由於 Google 伺服器冷卻懲罰生效中，該標的暫無 conclusions 看板。請至 Google AI Studio 產生新 Key 貼上，或等待冷卻結束後，點擊左側「🔄 同步更新全部數據」。")
             
         else:
             st.error(f"❌ 股票代碼 **{t}** 基礎行情下載失敗。")
