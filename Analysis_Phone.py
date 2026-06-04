@@ -7,7 +7,7 @@ import time
 from google import genai
 from google.genai import types
 
-# 1. 🚀 金鑰隱式注入機制 (支援新型 AQ 憑證環境)
+# 1. 🚀 金鑰隱式注入機制 (同時注入雙軌變數以支援新型 AQ 憑證)
 try:
     if "GEMINI_API_KEY" in st.secrets:
         clean_key = str(st.secrets["GEMINI_API_KEY"]).strip().replace('"', '').replace("'", "")
@@ -16,7 +16,7 @@ try:
 except Exception:
     pass
 
-# 初始化用戶端
+# 初始化 Gemini 用戶端
 client = genai.Client()
 
 # 2. 設定網頁版面 (針對手機直式螢幕優化)
@@ -39,14 +39,13 @@ if st.sidebar.button("🔄 重置並清空所有快取"):
     st.cache_data.clear()
     st.rerun()
 
-# 智慧型數據獲取引擎
+# 4. 數據獲取引擎
 @st.cache_data(ttl=60)
 def fetch_all_market_data(tickers):
     market_data_batch = {}
     session = requests.Session()
     session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36'})
     
-    # 建立內置硬核翻譯機制
     stock_map = {
         "鴻海": "2317", "台積電": "2330", "聯發科": "2454", "富邦金": "2881",
         "國泰金": "2882", "中信金": "2891", "元大台灣50": "0050", "元大": "0050", 
@@ -106,21 +105,22 @@ def fetch_all_market_data(tickers):
             pass
     return market_data_batch
 
-# 智慧型操盤手技術分析引擎 (移除所有易導致解析出錯的複雜標題規範)
+# 極速量價分析引擎 (100% 杜絕截斷，高強迫性短句輸出)
 def analyze_stock_markdown(ticker_name, data_dict):
     max_retries = 3
     for attempt in range(max_retries):
         try:
+            # 💡 終極修復：完全去掉任何可能引發過長背誦的引言，改為高強度指令，強制使用簡單短句
             prompt = f"""
-            你是一位華爾街高級操盤手。請針對「{ticker_name}」當前的即時量價進行精準分析。
-            最新數據：價格 {data_dict.get('price')} 元，今日高低區間 {data_dict.get('high')} ~ {data_dict.get('low')}，成交量 {data_dict.get('volume')} 股。
+            你是一位專業操盤手。請針對「{ticker_name}」進行極簡技術面點評。
+            最新數據：價格 {data_dict.get('price')} 元，今日區間 {data_dict.get('high')}~{data_dict.get('low')}，成交量 {data_dict.get('volume')} 股。
             
-            請完全使用「繁體中文」輸出，並嚴格分為以下 4 個部分。每部分直接寫重點，不要囉唆：
+            請強制且必須使用「純繁體中文」輸出以下四行，每行請直接寫結論，嚴禁超過40個字：
             
-            1. 布林通道位置評估：分析當前價格相對於20MA均線與上下軌道的關係。
-            2. 短線實戰操作觀察：指出關鍵的壓力位與支撐位。
-            3. 操盤手風險控制策略：給出明確的停損防線。
-            4. 最終投資評級結論：必須明確包含 '買入 (Buy)', '持有 (Hold)', 或 '賣出 (Sell)' 之一。
+            - 軌道型態：(直接填寫股價相對於布林通道的位置)
+            - 實戰觀察：(直接填寫短期關鍵壓力與支撐價位)
+            - 風控防線：(直接填寫建議停損或守護的目標價)
+            - 機構結論：[此處必須明確包含 '買入', '持有', 或 '賣出' 之一]
             """
             
             safety_settings = [
@@ -134,8 +134,8 @@ def analyze_stock_markdown(ticker_name, data_dict):
                 model='gemini-2.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.2,
-                    max_output_tokens=1500,
+                    temperature=0.4,  # 微幅拉高，防止低溫截斷
+                    max_output_tokens=600,
                     safety_settings=safety_settings
                 ),
             )
@@ -153,7 +153,7 @@ def analyze_stock_markdown(ticker_name, data_dict):
             if attempt < max_retries - 1:
                 time.sleep(2)
                 continue
-            return {"success": False, "error": "模型未返回有效內容。"}
+            return {"success": False, "error": "模型未返回內容。"}
         except Exception as e:
             err_msg = str(e)
             if "503" in err_msg or "UNAVAILABLE" in err_msg:
@@ -162,9 +162,9 @@ def analyze_stock_markdown(ticker_name, data_dict):
                     continue
             return {"success": False, "error": err_msg}
             
-    return {"success": False, "error": "伺服器超載。"}
+    return {"success": False, "error": "伺服器繁忙。"}
 
-# 渲染基礎面板與技術圖表
+# 5. 🎨 畫面渲染核心
 market_data = fetch_all_market_data(ticker_list)
 
 for t in ticker_list:
@@ -185,17 +185,19 @@ for t in ticker_list:
         except:
             st.caption("技術圖表渲染中...")
 
-        # 核心開箱按鈕
+        # 報告快取與渲染邏輯
         if t in st.session_state.ai_reports_storage:
             ai_res = st.session_state.ai_reports_storage[t]
             if ai_res["success"]:
                 report_text = str(ai_res["text"])
+                
                 if "買入" in report_text or "Buy" in report_text:
                     st.success("🎯 **機構綜合投資結論：建議 買入 (Buy)**")
                 elif "賣出" in report_text or "Sell" in report_text:
                     st.error("🎯 **機構綜合投資結論：建議 賣出 (Sell)**")
                 else:
                     st.warning("🎯 **機構綜合投資結論：建議 持有 (Hold) 觀望**")
+                    
                 st.markdown(report_text)
             else:
                 st.error(f"⚠️ 生成失敗：{ai_res['error']}")
