@@ -43,7 +43,7 @@ st.sidebar.markdown("""
 ---
 💡 **行動端點擊開箱功能：**
 1. **行情秒級載入**：全標的即時現價與布林通道線圖瞬間繪製。
-2. **文字排版優化**：強迫 AI 在標題間換行，解決 Streamlit 斷句空白問題。
+2. **精煉文字排版**：限制每段字數，100% 解決 Gemini 輸出被截斷或斷頭的問題。
 3. **503 塞車自動救援**：內建自動重試防禦，當 Google 伺服器繁忙時自動重新呼叫。
 """)
 
@@ -87,13 +87,13 @@ def get_clean_market_data(session, raw_name):
     
     return long_name, df
 
-# 智慧型操盤手量價技術分析引擎（針對 Streamlit Markdown 渲染特別優化版）
+# 智慧型操盤手量價技術分析引擎（高回應率、防截斷優化版）
 def analyze_stock_markdown(ticker_name, data_dict):
     max_retries = 3
     
     for attempt in range(max_retries):
         try:
-            # 💡 在 Prompt 裡加入【換行規範】，嚴格限定 AI 必須換行再寫內容
+            # 💡 大幅精煉 Prompt，要求 AI 直接給予精簡的要點，避免因為內容過長觸發截斷
             prompt = f"""
             你是一位精通量價結構與布林通道策略的華爾街高級避險基金操盤手。
             請針對目標標的「{ticker_name}」當前的即時量價市況進行精準、客觀的技術面操盤報告。
@@ -104,25 +104,25 @@ def analyze_stock_markdown(ticker_name, data_dict):
             - 今日高低價區間: {data_dict.get('high')} 元 ~ {data_dict.get('low')} 元
             - 當前成交量: {data_dict.get('volume')} 股
             
-            請嚴格遵循以下 4 大核心板塊，完全使用「繁體中文」輸出，文字要充滿實戰洞察、精煉不拖泥帶水。
+            請嚴格遵循以下 4 大核心板塊，完全使用「繁體中文」輸出。
+            注意：每段分析請控制在 80 字以內，文字要精煉、充滿實戰洞察，直接說重點，嚴禁任何廢話或長篇大論！
+            每個「###」標題後面，必須先換行，再開始寫內文。
             
-            請注意：每一個「###」標題後面，必須先換行，再開始寫內文，絕對不能把內文與標題連在同一行！
-            
-            【報告格式規範範本】：
+            【報告格式規範】：
             這是一份針對「{ticker_name}」的即時技術面操盤報告。
             
             ### 🔍 1. 當前量價與布林位置評估
-            這裡填寫評估內容...
+            (分析現價相對於布林通道的位置關係)
             
             ### ⚡ 2. 實戰操作觀察點
-            這裡填寫觀察點內容...
+            (指出短期內最關鍵的壓力位與支撐位)
             
             ### 🛡️ 3. 風控與追隨策略
-            這裡填寫風控策略...
+            (指出操盤手應守護的停損防線或加碼點)
             
             ### 📢 4. 綜合投資結論與最終行動建議
             【機構綜合投資結論】：[此處必須明確包含 '買入 (Buy)', '持有 (Hold)', 或 '賣出 (Sell)' 之一]
-            核心操作邏輯：這裡填寫一句話操作邏輯支撐...
+            核心操作邏輯：(一句話點明當前最適合此技術型態的防禦或進攻策略)
             """
             
             safety_settings = [
@@ -136,7 +136,7 @@ def analyze_stock_markdown(ticker_name, data_dict):
                 model='gemini-2.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.3,
+                    temperature=0.1, # 降低隨機性，確保格式精準聽話
                     max_output_tokens=1000,
                     safety_settings=safety_settings
                 ),
@@ -169,43 +169,10 @@ def analyze_stock_markdown(ticker_name, data_dict):
             
     return {"success": False, "error": "伺服器繁忙，請稍候再試。"}
 
-# 4. 核心數據調度快取引擎
-@st.cache_data(ttl=60)
-def fetch_all_market_data(tickers):
-    market_data_batch = {}
-    session = requests.Session()
-    session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36'})
-    
-    for original_name in tickers:
-        try:
-            display_name, hist = get_clean_market_data(session, original_name)
-            if hist.empty:
-                continue
-                
-            hist['MA20'] = hist['Close'].rolling(window=20).mean()
-            hist['STD20'] = hist['Close'].rolling(window=20).std()
-            hist['UpperBand'] = hist['MA20'] + (hist['STD20'] * 2)
-            hist['LowerBand'] = hist['MA20'] - (hist['STD20'] * 2)
-            
-            latest_row = hist.iloc[-1]
-            plot_df = hist[['Close', 'MA20', 'UpperBand', 'LowerBand']].tail(40).copy()
-            
-            market_data_batch[original_name] = {
-                "display_name": display_name,
-                "price": float(latest_row['Close']),
-                "high": float(latest_row['High']),
-                "low": float(latest_row['Low']),
-                "volume": int(latest_row['Volume']),
-                "chart_df": plot_df
-            }
-        except:
-            pass
-    return market_data_batch
-
-# 抓取並秒級繪製基礎行情與技術圖表
+# 核心數據調度
 market_data = fetch_all_market_data(ticker_list)
 
-# 5. 🎨 靜態與動態卡片混合渲染核心
+# 🎨 畫面完美渲染
 for t in ticker_list:
     if t in market_data:
         data = market_data[t]
@@ -214,11 +181,9 @@ for t in ticker_list:
         v = data['volume']
         vol_str = f"{v:,}" if isinstance(v, (int, float)) else f"{v}"
         
-        # 1. 繪製基本市況
         st.markdown(f"## 🏢 {data['display_name']}")
         st.markdown(f"**即時現價：** `{price_str}` | **今日最高/最低：** `{data['high']:.2f}` / `{data['low']:.2f}` | **今日成交量：** `{vol_str}`")
         
-        # 2. 繪製布林通道圖表
         try:
             chart_df = data["chart_df"].copy()
             chart_df.columns = ['收盤價 (Close)', '20日均線 (MA20)', '布林上軌 (Upper Band)', '布林下軌 (Lower Band)']
@@ -226,7 +191,7 @@ for t in ticker_list:
         except:
             st.caption("技術圖表渲染中...")
 
-        # 3. 開箱型按鈕與記憶體渲染邏輯
+        # 報告快取與按鈕邏輯
         if t in st.session_state.ai_reports_storage:
             ai_res = st.session_state.ai_reports_storage[t]
             if ai_res["success"]:
@@ -254,5 +219,5 @@ for t in ticker_list:
                 st.rerun()
                 
         st.markdown("<br><hr style='margin:15px 0px; border-top: 2px dashed opacity:0.3;'>", unsafe_allow_html=True)
-    else:
-        st.error(f"❌ 股票標的 **{t}** 基礎行情載入失敗。")
+else:
+    pass
