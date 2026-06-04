@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import json
+import time
 from google import genai
 from google.genai import types
 
@@ -42,7 +43,8 @@ st.sidebar.markdown("""
 ---
 💡 **行動端點擊開箱功能：**
 1. **行情秒級載入**：全標的即時現價與布林通道線圖瞬間繪製。
-2. **操盤手指標優化**：改採技術量價與布林通道核心解構，100% 避開 AI Studio 版權與合規阻擋，報告 100% 成功產出！
+2. **文字排版優化**：強迫 AI 在標題間換行，解決 Streamlit 斷句空白問題。
+3. **503 塞車自動救援**：內建自動重試防禦，當 Google 伺服器繁忙時自動重新呼叫。
 """)
 
 # 【智慧對照表】
@@ -85,74 +87,87 @@ def get_clean_market_data(session, raw_name):
     
     return long_name, df
 
-# 智慧型操盤手量價技術分析引擎（高回應率、絕不觸發版權阻擋）
+# 智慧型操盤手量價技術分析引擎（針對 Streamlit Markdown 渲染特別優化版）
 def analyze_stock_markdown(ticker_name, data_dict):
-    try:
-        # 重新結構化 Prompt：聚焦於現有數據的量價與布林通道關係分析，避開猜測財報
-        prompt = f"""
-        你是一位精通量價結構與布林通道（Bollinger Bands）策略的華爾街高級避險基金操盤手。
-        請針對目標標的「{ticker_name}」當前的即時量價市況進行精準、客觀的技術面操盤報告。
-        
-        當前標的數據快照：
-        - 標的名稱: {data_dict.get('name')}
-        - 當前最新收盤價: {data_dict.get('price')} 元
-        - 今日高低價區間: {data_dict.get('high')} 元 ~ {data_dict.get('low')} 元
-        - 當前成交量: {data_dict.get('volume')} 股
-        - 技術指標狀態: 布林通道 20MA 均線及 ±2 倍標準差軌道已在前端圖表渲染完成。
-        
-        請嚴格遵循以下 4 大核心板塊，完全使用「繁體中文」輸出，文字要辛辣、充滿實戰洞察、精煉不拖泥帶水：
-        
-        ### 📊 1. 當前量價與布林位置評估
-        (分析現價相對於布林上軌、下軌或20MA均線的位置關係，判斷當前屬於超買、超賣、還是高檔震盪擴張期。)
-        
-        ### ⚡ 2. 實戰操作觀察點
-        (從今日的高低價差與成交量變化，指出短期內最關鍵的壓力位與支撐位。)
-        
-        ### 🚨 3. 風控與追隨策略
-        (若發生突發性帶量破位，操盤手應守護的停損防線或加碼點。)
-        
-        ### 📢 4. 綜合投資結論與最終行動建議
-        【機構綜合投資結論】：[此處必須明確包含 '買入 (Buy)', '持有 (Hold)', 或 '賣出 (Sell)' 之一]
-        核心操作邏輯：(一句話點明當前最適合此技術型態的防禦或進攻策略)
-        """
-        
-        safety_settings = [
-            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
-            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
-            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
-            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
-        ]
-
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.3,
-                max_output_tokens=800,
-                safety_settings=safety_settings
-            ),
-        )
-        
-        generated_text = getattr(response, 'text', None)
-        
-        if not generated_text and response.candidates:
-            try:
-                generated_text = response.candidates[0].content.parts[0].text
-            except:
-                pass
-                
-        if generated_text:
-            return {"success": True, "text": str(generated_text).strip()}
-            
-        finish_reason = "UNKNOWN"
+    max_retries = 3
+    
+    for attempt in range(max_retries):
         try:
-            finish_reason = response.candidates[0].finish_reason
-        except:
-            pass
-        return {"success": False, "error": f"安全鎖觸發或無權限。原因狀態碼: {finish_reason}"}
-        
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+            # 💡 在 Prompt 裡加入【換行規範】，嚴格限定 AI 必須換行再寫內容
+            prompt = f"""
+            你是一位精通量價結構與布林通道策略的華爾街高級避險基金操盤手。
+            請針對目標標的「{ticker_name}」當前的即時量價市況進行精準、客觀的技術面操盤報告。
+            
+            當前標的數據快照：
+            - 標的名稱: {data_dict.get('name')}
+            - 當前最新收盤價: {data_dict.get('price')} 元
+            - 今日高低價區間: {data_dict.get('high')} 元 ~ {data_dict.get('low')} 元
+            - 當前成交量: {data_dict.get('volume')} 股
+            
+            請嚴格遵循以下 4 大核心板塊，完全使用「繁體中文」輸出，文字要充滿實戰洞察、精煉不拖泥帶水。
+            
+            請注意：每一個「###」標題後面，必須先換行，再開始寫內文，絕對不能把內文與標題連在同一行！
+            
+            【報告格式規範範本】：
+            這是一份針對「{ticker_name}」的即時技術面操盤報告。
+            
+            ### 🔍 1. 當前量價與布林位置評估
+            這裡填寫評估內容...
+            
+            ### ⚡ 2. 實戰操作觀察點
+            這裡填寫觀察點內容...
+            
+            ### 🛡️ 3. 風控與追隨策略
+            這裡填寫風控策略...
+            
+            ### 📢 4. 綜合投資結論與最終行動建議
+            【機構綜合投資結論】：[此處必須明確包含 '買入 (Buy)', '持有 (Hold)', 或 '賣出 (Sell)' 之一]
+            核心操作邏輯：這裡填寫一句話操作邏輯支撐...
+            """
+            
+            safety_settings = [
+                types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+            ]
+
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.3,
+                    max_output_tokens=1000,
+                    safety_settings=safety_settings
+                ),
+            )
+            
+            generated_text = getattr(response, 'text', None)
+            
+            if not generated_text and response.candidates:
+                try:
+                    generated_text = response.candidates[0].content.parts[0].text
+                except:
+                    pass
+                    
+            if generated_text:
+                return {"success": True, "text": str(generated_text).strip()}
+                
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+                
+            return {"success": False, "error": "AI 未返回文字。"}
+            
+        except Exception as e:
+            err_msg = str(e)
+            if "503" in err_msg or "UNAVAILABLE" in err_msg:
+                if attempt < max_retries - 1:
+                    time.sleep(2.5)
+                    continue
+            return {"success": False, "error": err_msg}
+            
+    return {"success": False, "error": "伺服器繁忙，請稍候再試。"}
 
 # 4. 核心數據調度快取引擎
 @st.cache_data(ttl=60)
